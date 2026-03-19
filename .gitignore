@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+.pytest_cache/
+.uv/
+
+# ROS 2 Build Artifacts
+build/
+install/
+log/
+
+# IDEs
+.vscode/
+.idea/
+.DS_Store
+
+# Model weights (Keep the repo light)
+*.ts
+*.pt
+
+# Other
+*.log
+*.tmp
+*.mp4
