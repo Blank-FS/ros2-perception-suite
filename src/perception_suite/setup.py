@@ -10,6 +10,8 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        ('share/' + package_name + '/config', ['config/perception.yaml']),
+        ('share/' + package_name + '/launch', ['launch/pipeline.launch.py']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -24,9 +26,12 @@ setup(
     },
     entry_points={
     'console_scripts': [
-        'video_node = perception_suite.video_node:main',
-        'inference_node = perception_suite.inference_node:main',
-        'visualizer_node = perception_suite.visualizer_node:main',
+        '1_video_node = perception_suite.1_video_node:main',
+        '2_preprocess_node = perception_suite.2_preprocess_node:main',
+        '3_segmentation_node = perception_suite.3_segmentation_node:main',
+        '4_postprocess_node = perception_suite.4_postprocess_node:main',
+        '5_planner_node = perception_suite.5_planner_node:main',
+        '6_visualizer_node = perception_suite.6_visualizer_node:main',
     ],
 },
 )
