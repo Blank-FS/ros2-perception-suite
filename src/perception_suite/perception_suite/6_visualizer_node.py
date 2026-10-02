@@ -69,16 +69,16 @@ class VisualizationNode(Node):
         self.stats = RuntimeStats()
         self.bridge = CvBridge()
 
-        # All four share the source frame's stamp. The queue must span the
-        # segmentation latency, since frames arrive long before their masks.
+        # All four share the source frame's stamp and arrive once per segmented
+        # frame, so they match however slow segmentation is.
         self.sync = TimeSynchronizer(
             [
-                Subscriber(self, Image, 'preprocessed_frames'),
+                Subscriber(self, Image, 'segmented_frames'),
                 Subscriber(self, Image, 'road_mask'),
                 Subscriber(self, Image, 'stabilized_mask'),
                 Subscriber(self, Path, 'path'),
             ],
-            queue_size=30,
+            queue_size=10,
         )
         self.sync.registerCallback(self.display_callback)
         self.get_logger().info(

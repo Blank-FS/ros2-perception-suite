@@ -30,6 +30,9 @@ class SegmentationNode(Node):
         self.segmenter = RoadSegmenter(config)
         self.bridge = CvBridge()
         self.publisher = self.create_publisher(Image, 'road_mask', 10)
+        # The frames actually segmented, for the visualizer: matching against
+        # /preprocessed_frames would only work while segmentation keeps up.
+        self.frame_publisher = self.create_publisher(Image, 'segmented_frames', 10)
         self.subscription = self.create_subscription(
             Image, 'preprocessed_frames', self.on_frame, LATEST_ONLY)
         self.get_logger().info('Segmentation online')
@@ -47,6 +50,7 @@ class SegmentationNode(Node):
         out = self.bridge.cv2_to_imgmsg(encode_mask(result.mask, confidence), '32FC1')
         out.header = msg.header
         self.publisher.publish(out)
+        self.frame_publisher.publish(msg)
 
 
 def main(args=None):

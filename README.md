@@ -11,12 +11,12 @@ A ROS 2 perception pipeline for real-time drivable terrain segmentation and path
 | --------------------- | -------------------------- | ------------------------------------------------------------------ |
 | `1_video_node`        | BeamNG camera (stand-in)   | `/raw_frames` (bgr8)                                               |
 | `2_preprocess_node`   | `ImagePreprocessor`        | `/preprocessed_frames` (bgr8, working size)                        |
-| `3_segmentation_node` | `RoadSegmenter` (YOLOE-26) | `/road_mask` (32FC1, road pixels = best detection confidence)      |
+| `3_segmentation_node` | `RoadSegmenter` (YOLOE-26) | `/road_mask` (32FC1, road pixels = best detection confidence), `/segmented_frames` (the frames it segmented, for the visualizer) |
 | `4_postprocess_node`  | `TemporalStabilizer`       | `/stabilized_mask` (32FC1)                                         |
 | `5_planner_node`      | `CenterlinePlanner`        | `/path` (`nav_msgs/Path`, metres, x forward, y left)               |
 | `6_visualizer_node`   | `AutonomyDashboard`        | Dashboard window (keys: `0`-`9` debug views, `T` timing, `Q` quit) |
 
-Every stage copies the header of the frame it came from, so the visualizer matches a frame, its mask and its path by timestamp.
+Every stage copies the header of the frame it came from, so the visualizer matches a frame, its masks and its path by timestamp. It matches against `/segmented_frames` rather than `/preprocessed_frames`, so the dashboard works however slowly segmentation runs.
 
 Not ported from orfd-lane-detection:
 
@@ -90,7 +90,20 @@ If you built with the wrong Python, delete the old environment and build output,
 rm -rf .venv build install log
 ```
 
-On a Jetson, the PyTorch that `uv` installs from PyPI may not use the GPU, so YOLOE can fall back to the CPU. For GPU inference, install NVIDIA's PyTorch build for your JetPack version into `.venv`.
+#### Jetson
+
+On ARM64 Linux with Python 3.10 (a Jetson running ROS Humble), `uv sync` installs NVIDIA's GPU build of PyTorch, torch 2.8 for JetPack 6, instead of PyPI's build, which has no GPU support there. It needs:
+
+- **JetPack 6.1 or 6.2** (L4T R36.4, CUDA 12.6, cuDNN 9). Check with `cat /etc/nv_tegra_release`. JetPack 6.0 ships CUDA 12.2 and cuDNN 8, which this build cannot use.
+- **OpenBLAS:** `sudo apt install libopenblas0`
+
+Then confirm the GPU is in use:
+
+```bash
+python -c "import torch; print(torch.cuda.is_available())"
+```
+
+If it prints `False`, segmentation runs on the CPU at a fraction of a frame per second. If `import torch` fails with a missing `lib*.so`, one of the requirements above is missing.
 
 ### 4. Add a video
 
