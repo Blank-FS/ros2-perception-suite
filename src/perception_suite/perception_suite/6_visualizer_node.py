@@ -1,4 +1,6 @@
+import os
 import signal
+import sys
 import time
 
 import rclpy
@@ -202,6 +204,14 @@ class VisualizationNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
+    # OpenCV's Qt backend only draws through X11, and with no display it
+    # aborts the process rather than raising, so check before any window opens.
+    if not os.environ.get('DISPLAY'):
+        rclpy.logging.get_logger('visualizer_node').error(
+            'No display (DISPLAY is unset, e.g. over SSH). Run on the desktop, '
+            'export DISPLAY=:0 for a local screen, or launch with visualize:=false.')
+        rclpy.try_shutdown()
+        sys.exit(1)
     try:
         rclpy.spin(VisualizationNode())
     except (KeyboardInterrupt, ExternalShutdownException):

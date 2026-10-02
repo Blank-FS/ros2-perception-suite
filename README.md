@@ -35,6 +35,7 @@ As a result, the dashboard's vehicle, control and depth panels read zero.
 | Python                                                                  | Must be the version your ROS distro was built for (see below), managed with `uv` |
 | [orfd-lane-detection](https://github.com/HATCI-MDP/orfd-lane-detection) | Cloned next to this workspace (see Setup)                                |
 | `uv`                                                                    | [Install guide](https://docs.astral.sh/uv/getting-started/installation/) |
+| `git`                                                                   | `uv sync` fetches Ultralytics' CLIP text encoder from GitHub             |
 | CUDA-capable GPU                                                        | Optional; YOLOE runs on the CPU, more slowly                             |
 
 ---
@@ -118,6 +119,8 @@ ros2 launch perception_suite pipeline.launch.py scene:=snow
 | `config`       | `config/perception.yaml` | Pipeline config YAML                                                                      |
 | `speed_mps`    | `0.0`                    | Fixed speed given to the planner (must be written as a float)                             |
 | `visualize`    | `true`                   | Open the dashboard window                                                                 |
+
+The dashboard needs a display. Over SSH without X forwarding, launch with `visualize:=false`, or run `export DISPLAY=:0` first to show it on the machine's own screen. Without a display, the visualizer exits with an error and the other nodes keep running.
 
 Run `ros2 launch perception_suite pipeline.launch.py --show-args` to list the arguments. An invalid `source` or `scene` stops the launch before any node starts.
 
