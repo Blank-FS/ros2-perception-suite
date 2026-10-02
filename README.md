@@ -31,8 +31,8 @@ As a result, the dashboard's vehicle, control and depth panels read zero.
 
 | Dependency                                                              | Notes                                                                    |
 | ----------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| ROS 2                                                                   | Tested on Jazzy                                                          |
-| Python                                                                  | Tested on 3.12.3, managed with `uv`                                      |
+| ROS 2                                                                   | Tested on Jazzy (Ubuntu 24.04) and Humble (Ubuntu 22.04, Jetson Orin)    |
+| Python                                                                  | Must be the version your ROS distro was built for (see below), managed with `uv` |
 | [orfd-lane-detection](https://github.com/HATCI-MDP/orfd-lane-detection) | Cloned next to this workspace (see Setup)                                |
 | `uv`                                                                    | [Install guide](https://docs.astral.sh/uv/getting-started/installation/) |
 | CUDA-capable GPU                                                        | Optional; YOLOE runs on the CPU, more slowly                             |
@@ -60,6 +60,8 @@ Because the dependency is editable, changes made in `orfd-lane-detection` take e
 
 ### 2. Install ROS dependencies
 
+Replace `jazzy` with your distro, e.g. `humble`, here and in every later `source` command.
+
 ```bash
 cd ros2-perception-suite
 source /opt/ros/jazzy/setup.bash
@@ -69,10 +71,25 @@ rosdep install --from-paths src --ignore-src -y
 ### 3. Install Python dependencies and build
 
 ```bash
-uv sync
+uv sync --python /usr/bin/python3
 source .venv/bin/activate
 colcon build --symlink-install
 ```
+
+The virtual environment must use the same Python version that your ROS distro was built for. ROS's compiled modules (such as `rclpy`) only load into that version. If the versions differ, every node fails with `No module named 'rclpy._rclpy_pybind11'`. `/usr/bin/python3` is the system Python that ROS is built against, so `--python /usr/bin/python3` always picks the right one:
+
+| ROS 2 distro | Ubuntu | Python |
+| ------------ | ------ | ------ |
+| Humble       | 22.04  | 3.10   |
+| Jazzy        | 24.04  | 3.12   |
+
+If you built with the wrong Python, delete the old environment and build output, then repeat this step:
+
+```bash
+rm -rf .venv build install log
+```
+
+On a Jetson, the PyTorch that `uv` installs from PyPI may not use the GPU, so YOLOE can fall back to the CPU. For GPU inference, install NVIDIA's PyTorch build for your JetPack version into `.venv`.
 
 ### 4. Add a video
 

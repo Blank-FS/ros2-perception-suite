@@ -3,14 +3,13 @@ name = "MDP"
 version = "0.1.0"
 description = "Perception and planning ROS2 stack for autonomous vehicles"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 dependencies = [
     "colcon-common-extensions>=0.3.0",
     "colcon-ros>=0.5.0",
     "numpy<2.0",
     "offroad-autonomy",
     "opencv-python>=4.11.0.86",
-    "scipy>=1.17.1",
     "ultralytics>=8.4.23",
 ]
 
