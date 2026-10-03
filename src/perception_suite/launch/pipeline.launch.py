@@ -46,6 +46,7 @@ def _validated(context):
         package='perception_suite', executable='3_segmentation_node', output='screen',
         parameters=[{'config': LaunchConfiguration('config'),
                      'prompts': _scene_prompts(context),
+                     'scene': LaunchConfiguration('scene'),
                      'backend': LaunchConfiguration('backend')}])
     return [segmentation] + _source(context)
 

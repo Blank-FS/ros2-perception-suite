@@ -3,7 +3,8 @@
 An engine has the prompts and input size compiled in, and only runs on the
 GPU model and TensorRT version that built it. All of those go into the cached
 file's name, so changing any of them builds a new engine instead of loading
-one that segments the wrong thing or fails to load.
+one that segments the wrong thing or fails to load. The scene name is there
+too, but only so a person can tell the files apart.
 """
 
 import hashlib
@@ -28,7 +29,7 @@ def unsupported_reason() -> str | None:
     return None
 
 
-def engine_path(config: PipelineConfig) -> Path:
+def engine_path(config: PipelineConfig, scene: str = '') -> Path:
     import tensorrt
     import torch
     weights = Path(config.model_weights)
@@ -40,7 +41,8 @@ def engine_path(config: PipelineConfig) -> Path:
         'tensorrt': tensorrt.__version__,
     }, sort_keys=True)
     digest = hashlib.sha256(key.encode()).hexdigest()[:12]
-    return weights.with_name(f'{weights.stem}.{digest}.engine')
+    label = f'{scene}.' if scene else ''
+    return weights.with_name(f'{weights.stem}.{label}{digest}.engine')
 
 
 def build_engine(config: PipelineConfig, path: Path) -> None:

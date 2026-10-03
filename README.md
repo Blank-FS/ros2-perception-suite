@@ -183,7 +183,7 @@ If that fails, install it with `sudo apt install python3-libnvinfer`.
 
 A plain `uv sync` removes the extra again. If TensorRT is not available, the segmentation node exits with the reason rather than falling back to PyTorch, so a comparison never silently measures the wrong backend.
 
-An engine has the scene's prompts and `perception.input_size` compiled in, and only runs on the GPU model and TensorRT version that built it. The first run with a new combination builds one, which takes several minutes. It is cached in the workspace root as `yoloe-26n-seg.<hash>.engine` and loads in seconds after that. Frames sent while it builds are dropped, so let the first run finish building, then launch again, or give it time with `source_delay:=600.0`.
+An engine has the scene's prompts and `perception.input_size` compiled in, and only runs on the GPU model and TensorRT version that built it. The first run with a new combination builds one, which takes several minutes. It is cached in the workspace root as `yoloe-26n-seg.<scene>.<hash>.engine` (for example `yoloe-26n-seg.snow.<hash>.engine`) and loads in seconds after that. Frames sent while it builds are dropped, so let the first run finish building, then launch again, or give it time with `source_delay:=600.0`.
 
 To compare the two backends, launch each in turn on the same video and read the dashboard's FPS and latency. Without the dashboard, run `ros2 topic hz /road_mask` for the segmentation rate. The pipeline cannot run faster than the 30 FPS video, so once TensorRT outruns the source, latency shows the difference better than FPS.
 

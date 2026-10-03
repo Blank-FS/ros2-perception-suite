@@ -26,6 +26,8 @@ class SegmentationNode(Node):
         prompts = self.declare_parameter('prompts', Parameter.Type.STRING_ARRAY).value
         if prompts:
             config = replace(config, perception_prompts=list(prompts))
+        # Only names the TensorRT engine file; the prompts are what count.
+        self.scene = self.declare_parameter('scene', '').value
         self.get_logger().info(f'Prompts: {config.perception_prompts}')
         # pytorch runs the weights as they are; tensorrt runs an engine built
         # from them, much faster on an NVIDIA GPU but fixed to the prompts.
@@ -52,7 +54,7 @@ class SegmentationNode(Node):
             # Not a fallback to pytorch: a silent switch would make a
             # comparison between the two backends meaningless.
             raise RuntimeError(f'TensorRT is not available: {reason}')
-        path = engine.engine_path(config)
+        path = engine.engine_path(config, self.scene)
         if not path.exists():
             self.get_logger().warn(
                 f'Building TensorRT engine {path} for these prompts and input size. '
