@@ -15,17 +15,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# For backend:=tensorrt, installed with `uv sync --extra tensorrt`. x86-64
-# only: on a Jetson, TensorRT ships with JetPack rather than PyPI. onnx,
-# onnxslim and onnxruntime are what Ultralytics needs to build an engine.
-# onnx uses ml-dtypes 0.5 types without requiring that version itself; 0.5
-# needs numpy 2 on Python 3.13+, newer than Humble (3.10) and Jazzy (3.12).
+# For backend:=tensorrt, installed with `uv sync --extra tensorrt`. TensorRT
+# itself comes from PyPI on x86-64 only; a Jetson uses JetPack's, through the
+# venv's system site packages. onnx is what Ultralytics needs to build an
+# engine. It uses ml-dtypes 0.5 types without requiring that version itself;
+# 0.5 needs numpy 2 on Python 3.13+, newer than Humble (3.10) and Jazzy (3.12).
 tensorrt = [
     "tensorrt-cu12>=10,<10.14; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "onnx>=1.12,<2; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "ml-dtypes>=0.5; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version < '3.13'",
-    "onnxslim>=0.1.71; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "onnxruntime-gpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "onnx>=1.12,<2; sys_platform == 'linux'",
+    "ml-dtypes>=0.5; sys_platform == 'linux' and python_version < '3.13'",
 ]
 
 [tool.uv.sources]

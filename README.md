@@ -142,10 +142,12 @@ On the first run, the model weights (`yoloe-26n-seg.pt`) and the YOLOE text enco
 Run from the workspace root, because the video and model weight paths are relative to it. In each new terminal:
 
 ```bash
-source /opt/ros/jazzy/setup.bash
-source .venv/bin/activate && source install/setup.bash
+source .venv/bin/activate
+source /opt/ros/jazzy/setup.bash && source install/setup.bash
 ros2 launch perception_suite pipeline.launch.py scene:=snow
 ```
+
+Activate the environment before sourcing ROS. If the environment is already active, `activate` resets `PATH` to what it was when it was first activated, which drops ROS from it and fails with `ros2: command not found`.
 
 | Argument       | Default                  | What it does                                                                              |
 | -------------- | ------------------------ | ----------------------------------------------------------------------------------------- |
@@ -166,11 +168,19 @@ Run `ros2 launch perception_suite pipeline.launch.py --show-args` to list the ar
 
 `backend:=tensorrt` runs segmentation through a TensorRT engine instead of PyTorch. On an RTX A2000 Laptop GPU with `yoloe-26n-seg` at input size 640, inference took 9.7 ms per frame against 31.8 ms with PyTorch, and the masks matched closely (mean IoU 0.99).
 
-It needs an NVIDIA GPU that PyTorch can use and the `tensorrt` extra, which is x86-64 only:
+It needs an NVIDIA GPU that PyTorch can use and the `tensorrt` extra:
 
 ```bash
 uv sync --python /usr/bin/python3 --extra tensorrt
 ```
+
+On a Jetson, TensorRT itself comes with JetPack (TensorRT 8.6 on JetPack 6.0), not from the extra, and reaches the environment through `--system-site-packages` (see [Jetson](#jetson)). The extra only adds `onnx`, which building an engine needs. Check that JetPack's TensorRT is visible:
+
+```bash
+python -c "import tensorrt; print(tensorrt.__version__)"
+```
+
+If that fails, install it with `sudo apt install python3-libnvinfer`.
 
 A plain `uv sync` removes the extra again. If TensorRT is not available, the segmentation node exits with the reason rather than falling back to PyTorch, so a comparison never silently measures the wrong backend.
 
@@ -178,7 +188,7 @@ An engine has the scene's prompts and `perception.input_size` compiled in, and o
 
 To compare the two backends, launch each in turn on the same video and read the dashboard's FPS and latency. Without the dashboard, run `ros2 topic hz /road_mask` for the segmentation rate. The pipeline cannot run faster than the 30 FPS video, so once TensorRT outruns the source, latency shows the difference better than FPS.
 
-On a Jetson, TensorRT comes with JetPack rather than PyPI, and `backend:=tensorrt` has not been set up or tested there yet.
+On a Jetson, building an engine takes longer than on a desktop GPU, so give the first run a long `source_delay` or launch twice. The Jetson path has not been tested yet.
 
 To run a single stage on its own, use `ros2 run perception_suite <node>`, e.g. `ros2 run perception_suite 3_segmentation_node`. Without a scene, the segmentation node uses orfd's default prompts (the `trail` set).
 

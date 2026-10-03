@@ -21,7 +21,10 @@ def unsupported_reason() -> str | None:
     try:
         import tensorrt  # noqa: F401
     except ImportError:
-        return 'the tensorrt package is not installed (uv sync --extra tensorrt)'
+        # On a Jetson, TensorRT's Python bindings come with JetPack and reach
+        # the venv through --system-site-packages.
+        return ('the tensorrt package is not installed (uv sync --extra tensorrt; '
+                'on a Jetson, sudo apt install python3-libnvinfer)')
     return None
 
 
@@ -46,8 +49,11 @@ def build_engine(config: PipelineConfig, path: Path) -> None:
     model = YOLO(config.model_weights)
     # Set before export, or the engine segments the checkpoint's own classes.
     model.set_classes(list(config.perception_prompts))
+    # Unsimplified: simplifying needs onnxruntime-gpu, which has no Jetson
+    # build on PyPI, and TensorRT optimises the graph itself.
     built = Path(model.export(
-        format='engine', imgsz=int(config.perception_input_size), half=True, device=0))
+        format='engine', imgsz=int(config.perception_input_size), half=True,
+        simplify=False, device=0))
     # Export always writes <weights>.engine; renaming keeps engines for other
     # scenes and sizes from overwriting each other.
     built.replace(path)
