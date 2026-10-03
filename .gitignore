@@ -19,6 +19,8 @@ log/
 # Model weights (Keep the repo light)
 *.ts
 *.pt
+*.engine
+*.onnx
 
 # Other
 *.log

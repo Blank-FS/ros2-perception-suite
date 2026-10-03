@@ -12,6 +12,7 @@ from offroad_autonomy.perception.perception_view import PerceptionView
 from offroad_autonomy.perception.road_segmenter import RoadSegmenter
 from offroad_autonomy.types import FramePacket
 
+from perception_suite import engine
 from perception_suite.common import LATEST_ONLY, encode_mask, load_pipeline_config
 
 
@@ -26,6 +27,14 @@ class SegmentationNode(Node):
         if prompts:
             config = replace(config, perception_prompts=list(prompts))
         self.get_logger().info(f'Prompts: {config.perception_prompts}')
+        # pytorch runs the weights as they are; tensorrt runs an engine built
+        # from them, much faster on an NVIDIA GPU but fixed to the prompts.
+        backend = self.declare_parameter('backend', 'pytorch').value
+        if backend == 'tensorrt':
+            config = replace(config, model_weights=str(self._engine(config)))
+        elif backend != 'pytorch':
+            raise ValueError(f"backend must be 'pytorch' or 'tensorrt', got '{backend}'")
+        self.get_logger().info(f'Backend: {backend} ({config.model_weights})')
         self.valid_roi = PerceptionView(config).valid_roi
         self.segmenter = RoadSegmenter(config)
         self.bridge = CvBridge()
@@ -36,6 +45,20 @@ class SegmentationNode(Node):
         self.subscription = self.create_subscription(
             Image, 'preprocessed_frames', self.on_frame, LATEST_ONLY)
         self.get_logger().info('Segmentation online')
+
+    def _engine(self, config):
+        reason = engine.unsupported_reason()
+        if reason:
+            # Not a fallback to pytorch: a silent switch would make a
+            # comparison between the two backends meaningless.
+            raise RuntimeError(f'TensorRT is not available: {reason}')
+        path = engine.engine_path(config)
+        if not path.exists():
+            self.get_logger().warn(
+                f'Building TensorRT engine {path} for these prompts and input size. '
+                'This takes several minutes, once; frames sent meanwhile are dropped.')
+            engine.build_engine(config, path)
+        return path
 
     def on_frame(self, msg):
         image = self.bridge.imgmsg_to_cv2(msg, 'bgr8')

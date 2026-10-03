@@ -20,6 +20,20 @@ dependencies = [
     "torchvision==0.23.0; sys_platform == 'linux' and platform_machine == 'aarch64' and python_version == '3.10'",
 ]
 
+[project.optional-dependencies]
+# For backend:=tensorrt, installed with `uv sync --extra tensorrt`. x86-64
+# only: on a Jetson, TensorRT ships with JetPack rather than PyPI. onnx,
+# onnxslim and onnxruntime are what Ultralytics needs to build an engine.
+# onnx uses ml-dtypes 0.5 types without requiring that version itself; 0.5
+# needs numpy 2 on Python 3.13+, newer than Humble (3.10) and Jazzy (3.12).
+tensorrt = [
+    "tensorrt-cu12>=10,<10.14; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "onnx>=1.12,<2; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "ml-dtypes>=0.5; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version < '3.13'",
+    "onnxslim>=0.1.71; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "onnxruntime-gpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
+
 [tool.uv.sources]
 offroad-autonomy = { path = "../orfd-lane-detection", editable = true }
 clip = { git = "https://github.com/ultralytics/CLIP.git" }

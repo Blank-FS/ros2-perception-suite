@@ -4,6 +4,7 @@
     ros2 launch perception_suite pipeline.launch.py source:=video video_path:=other.mp4
     ros2 launch perception_suite pipeline.launch.py scene:=snow
     ros2 launch perception_suite pipeline.launch.py visualize:=false
+    ros2 launch perception_suite pipeline.launch.py backend:=tensorrt
 
 Run it from the workspace root, where the relative video and weight paths
 point.
@@ -44,7 +45,8 @@ def _validated(context):
     segmentation = Node(
         package='perception_suite', executable='3_segmentation_node', output='screen',
         parameters=[{'config': LaunchConfiguration('config'),
-                     'prompts': _scene_prompts(context)}])
+                     'prompts': _scene_prompts(context),
+                     'backend': LaunchConfiguration('backend')}])
     return [segmentation] + _source(context)
 
 
@@ -86,6 +88,10 @@ def generate_launch_description():
         DeclareLaunchArgument('scene', default_value='trail',
                               description='Segmentation prompt set from perception.scenes '
                                           'in the config (e.g. trail, snow, gravel)'),
+        DeclareLaunchArgument('backend', default_value='pytorch',
+                              choices=['pytorch', 'tensorrt'],
+                              description='Segmentation inference: pytorch, or tensorrt '
+                                          '(NVIDIA GPU; builds an engine on first use)'),
         DeclareLaunchArgument('speed_mps', default_value='0.0',
                               description='Fixed vehicle speed given to the planner'),
         DeclareLaunchArgument('visualize', default_value='true',
