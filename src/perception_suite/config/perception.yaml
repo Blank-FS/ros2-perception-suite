@@ -4,7 +4,11 @@
 # file keep its tuning; values marked VIDEO describe the test video's camera.
 
 beamng:
-  cameras:
+  camera:
+    # VIDEO: camera height and pitch are guesses. Only the planner's
+    # image-to-ground mapping reads them.
+    height_m: 1.5
+    pitch_deg: 0.0
     # VIDEO: the frame as video_node publishes it (1280 wide, 16:9).
     # fov_h is a guess until the camera is known; the planner's metres and
     # its ROI both depend on it.
@@ -12,18 +16,16 @@ beamng:
       width: 1280
       height: 720
       fov_h: 90.0
-    # VIDEO: camera height and pitch are also guesses. Only the planner's
-    # image-to-ground mapping reads them.
-    stereo_rig:
-      height_m: 1.5
-      pitch_deg: 0.0
+    # Without this, the BeamNG vehicle's hood polygon would be cut out of the
+    # video's frames.
+    ego_mask:
+      enabled: false
 
 perception:
   # Run from the workspace root, like the other weight paths in this repo.
   model_weights: "yoloe-26n-seg.pt"
   segmentation_threshold: 0.15
   input_size: 640
-  segmentation_mode: left
   # Prompt sets by scene, picked with the launch argument scene:=<name>.
   # YOLOE scores how well the road matches the text, and the planner's gate
   # drops frames below planning.gate.confidence_threshold, so prompts that do
@@ -46,10 +48,6 @@ perception:
       - "gravel road"
       - "gravel path"
       - "dirt road"
-
-# Mono video: there is no stereo pair, so depth, terrain and fusion never run.
-depth:
-  enabled: false
 
 preprocessing:
   # Half the published frame, so the aspect matches the sensor above.

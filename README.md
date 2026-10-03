@@ -20,10 +20,9 @@ Every stage copies the header of the frame it came from, so the visualizer match
 
 Not ported from orfd-lane-detection:
 
-- **Stereo depth and fusion.** The video comes from a single camera, and orfd's baseline planner does not use depth anyway.
 - **Control.** There is no vehicle to steer.
 
-As a result, the dashboard's vehicle, control and depth panels read zero.
+As a result, the dashboard's vehicle and control panels read zero.
 
 ---
 
@@ -212,7 +211,7 @@ To add a scene, add a named prompt list under `perception.scenes` in the config.
 
 ### Camera
 
-The planner fits its path on the ground in metres, using the camera's field of view, height and pitch. The values under `beamng.cameras` in the config (`fov_h: 90`, `height_m: 1.5`, `pitch_deg: 0`) are guesses for `test_video.mp4`. The path's shape in the image is still correct, but its distances in metres are only as accurate as these values. Measure them for your camera.
+The planner fits its path on the ground in metres, using the camera's field of view, height and pitch. The values under `beamng.camera` in the config (`fov_h: 90`, `height_m: 1.5`, `pitch_deg: 0`) are guesses for `test_video.mp4`. The path's shape in the image is still correct, but its distances in metres are only as accurate as these values. Measure them for your camera.
 
 ---
 

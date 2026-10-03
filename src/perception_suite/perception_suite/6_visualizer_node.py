@@ -18,7 +18,7 @@ from offroad_autonomy.perception.perception_view import PerceptionView
 from offroad_autonomy.planning.perception_gate import PerceptionGate
 from offroad_autonomy.runtime.timing import RuntimeStats
 from offroad_autonomy.types import (
-    DEBUG_VIEWS,
+    DEBUG_VIEW_KEYS,
     ControlCommand,
     FramePacket,
     PathPlan,
@@ -39,7 +39,7 @@ class VisualizationNode(Node):
 
     The dashboard draws from a PipelineStepResult, so one is rebuilt per frame
     and the mask and path overlays are drawn by orfd's own code. Vehicle,
-    control and depth readouts stay at zero, because a video has none of them.
+    and control readouts stay at zero, because a video has none of them.
     """
 
     def __init__(self):
@@ -55,7 +55,8 @@ class VisualizationNode(Node):
             width=1600,
             height=900,
             colors=config.dashboard_colors,
-            sensor=config.segmentation_camera.sensor,
+            sensor=config.camera.sensor,
+            thresholds=config.dashboard_thresholds,
         )
         # Not orfd's DashboardWindow: it shrinks each frame to the window's
         # reported image area, and OpenCV's Qt backend (Linux) reports its
@@ -83,7 +84,7 @@ class VisualizationNode(Node):
         self.sync.registerCallback(self.display_callback)
         self.get_logger().info(
             'Keys: T timing overlay, Q quit, '
-            + ' '.join(f'{i}={name}' for i, name in enumerate(DEBUG_VIEWS)))
+            + ' '.join(f'{i}={name}' for i, name in DEBUG_VIEW_KEYS.items()))
 
     def display_callback(self, frame_msg, raw_mask_msg, mask_msg, path_msg):
         self.stats.tick()
@@ -123,7 +124,6 @@ class VisualizationNode(Node):
             mask=raw_mask,
             confidences=[confidence],
             num_detections=int(raw_mask.any()),
-            rgb_mask=raw_mask,
             valid_roi=self.valid_roi,
             road_fraction=road_fraction(raw_mask, self.valid_roi),
         )
@@ -142,7 +142,6 @@ class VisualizationNode(Node):
             stabilized=stabilized,
             plan=self._plan(path_msg, h, w),
             command=ControlCommand(),
-            depth_fallback='off',
         )
 
     def _plan(self, path_msg, h, w):
@@ -187,7 +186,6 @@ class VisualizationNode(Node):
             ego_coverage=self.ego_coverage,
             segmentation_mode=self.segmentation_mode,
             fallback_state=fallback_state,
-            depth_state='OFF',
             dashboard_fps=self.stats.fps(),
             timing_lines=lines,
         )
@@ -197,8 +195,8 @@ class VisualizationNode(Node):
         do nothing here."""
         if key in (ord('t'), ord('T')):
             self.timing_overlay = not self.timing_overlay
-        elif ord('0') <= key <= ord('9') and key - ord('0') < len(DEBUG_VIEWS):
-            self.debug_view = DEBUG_VIEWS[key - ord('0')]
+        elif ord('0') <= key <= ord('9') and key - ord('0') in DEBUG_VIEW_KEYS:
+            self.debug_view = DEBUG_VIEW_KEYS[key - ord('0')]
             self.get_logger().info(f'Debug view: {self.debug_view}')
 
 
