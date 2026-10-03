@@ -45,10 +45,23 @@ def engine_path(config: PipelineConfig) -> Path:
 
 def build_engine(config: PipelineConfig, path: Path) -> None:
     """FP16, which matched the PyTorch model's masks on the test video."""
+    import inspect
+
+    import torch
     from ultralytics import YOLO
+    from ultralytics.utils.export import engine as ultralytics_export
+    # Ultralytics passes dynamo=False to torch.onnx.export on torch 2.4 and
+    # later, but NVIDIA's JetPack 6.0 build (2.4.0a0) predates that argument.
+    # The flag only decides that argument; newer torch still needs it.
+    if 'dynamo' not in inspect.signature(torch.onnx.export).parameters:
+        ultralytics_export.TORCH_2_4 = False
     model = YOLO(config.model_weights)
     # Set before export, or the engine segments the checkpoint's own classes.
     model.set_classes(list(config.perception_prompts))
+    # Fold the prompts into the head now. Export otherwise does it after
+    # fusing the rest of the model, which on a checkpoint saved unfused has
+    # already removed the branch this needs, and fails in Ultralytics 8.4.
+    model.model.model[-1].fuse(model.model.pe)
     # Unsimplified: simplifying needs onnxruntime-gpu, which has no Jetson
     # build on PyPI, and TensorRT optimises the graph itself.
     built = Path(model.export(
