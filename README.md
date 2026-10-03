@@ -92,18 +92,42 @@ rm -rf .venv build install log
 
 #### Jetson
 
-On ARM64 Linux with Python 3.10 (a Jetson running ROS Humble), `uv sync` installs NVIDIA's GPU build of PyTorch, torch 2.8 for JetPack 6, instead of PyPI's build, which has no GPU support there. It needs:
+PyPI's ARM64 PyTorch has no GPU support, and a Jetson's CUDA build has to match its JetPack version. So on ARM64 Linux with Python 3.10 (a Jetson running ROS Humble), `uv sync` does not install torch or torchvision. The environment uses the JetPack-matched build already installed for the system Python instead, the same way other Jetson projects use it.
 
-- **JetPack 6.1 or 6.2** (L4T R36.4, CUDA 12.6, cuDNN 9). Check with `cat /etc/nv_tegra_release`. JetPack 6.0 ships CUDA 12.2 and cuDNN 8, which this build cannot use.
-- **OpenBLAS:** `sudo apt install libopenblas0`
+1. Check that the system Python has a CUDA build of PyTorch:
 
-Then confirm the GPU is in use:
+   ```bash
+   /usr/bin/python3 -c "import torch, torchvision; print(torch.__version__, torchvision.__version__, torch.cuda.is_available())"
+   ```
 
-```bash
-python -c "import torch; print(torch.cuda.is_available())"
-```
+   If it fails or prints `False`, install NVIDIA's build for your JetPack (`cat /etc/nv_tegra_release` shows the release: R36.3 is JetPack 6.0, R36.4 is 6.1/6.2) with `pip install --user`, plus a torchvision built for it:
 
-If it prints `False`, segmentation runs on the CPU at a fraction of a frame per second. If `import torch` fails with a missing `lib*.so`, one of the requirements above is missing.
+   | JetPack | PyTorch |
+   | ------- | ------- |
+   | 6.0 (CUDA 12.2) | NVIDIA's `torch-2.4.0a0+07cecf4168.nv24.05` wheel from `https://developer.download.nvidia.com/compute/redist/jp/v60/pytorch/`. NVIDIA publishes no torchvision for it, so torchvision is built from source |
+   | 6.1/6.2 (CUDA 12.6) | `torch==2.8.0 torchvision==0.23.0` from `--index-url https://pypi.jetson-ai-lab.io/jp6/cu126` |
+
+   Either also needs OpenBLAS: `sudo apt install libopenblas0`.
+
+2. Create the environment with access to the system's packages, in place of the plain `uv sync` above. The environment's own packages still take precedence; only torch and torchvision come from outside it:
+
+   ```bash
+   rm -rf .venv
+   uv venv --system-site-packages --python /usr/bin/python3
+   uv sync
+   source .venv/bin/activate
+   colcon build --symlink-install
+   ```
+
+   Later `uv sync` runs keep this setting. Only deleting `.venv` loses it.
+
+3. Confirm the GPU is in use:
+
+   ```bash
+   python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+   ```
+
+   If it prints `False`, segmentation runs on the CPU at a fraction of a frame per second.
 
 ### 4. Add a video
 
@@ -154,7 +178,7 @@ An engine has the scene's prompts and `perception.input_size` compiled in, and o
 
 To compare the two backends, launch each in turn on the same video and read the dashboard's FPS and latency. Without the dashboard, run `ros2 topic hz /road_mask` for the segmentation rate. The pipeline cannot run faster than the 30 FPS video, so once TensorRT outruns the source, latency shows the difference better than FPS.
 
-On a Jetson, TensorRT comes with JetPack rather than PyPI, and the virtual environment cannot see it, so `backend:=tensorrt` is not supported there yet.
+On a Jetson, TensorRT comes with JetPack rather than PyPI, and `backend:=tensorrt` has not been set up or tested there yet.
 
 To run a single stage on its own, use `ros2 run perception_suite <node>`, e.g. `ros2 run perception_suite 3_segmentation_node`. Without a scene, the segmentation node uses orfd's default prompts (the `trail` set).
 

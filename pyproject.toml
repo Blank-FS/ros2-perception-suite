@@ -12,12 +12,6 @@ dependencies = [
     "offroad-autonomy",
     "opencv-python>=4.11.0.86",
     "ultralytics>=8.4.23",
-    # Jetson (JetPack 6.1/6.2, ROS Humble): PyPI's aarch64 torch is CPU-only.
-    # 2.8 is the newest NVIDIA build that needs no extra system libraries
-    # (2.9+ links cuDSS, which JetPack does not ship). Elsewhere, torch comes
-    # from PyPI through ultralytics.
-    "torch==2.8.0; sys_platform == 'linux' and platform_machine == 'aarch64' and python_version == '3.10'",
-    "torchvision==0.23.0; sys_platform == 'linux' and platform_machine == 'aarch64' and python_version == '3.10'",
 ]
 
 [project.optional-dependencies]
@@ -37,10 +31,14 @@ tensorrt = [
 [tool.uv.sources]
 offroad-autonomy = { path = "../orfd-lane-detection", editable = true }
 clip = { git = "https://github.com/ultralytics/CLIP.git" }
-torch = { index = "jetson-jp6-cu126", marker = "sys_platform == 'linux' and platform_machine == 'aarch64' and python_version == '3.10'" }
-torchvision = { index = "jetson-jp6-cu126", marker = "sys_platform == 'linux' and platform_machine == 'aarch64' and python_version == '3.10'" }
 
-[[tool.uv.index]]
-name = "jetson-jp6-cu126"
-url = "https://pypi.jetson-ai-lab.io/jp6/cu126/+simple"
-explicit = true
+[tool.uv]
+# Jetson (ROS Humble, Python 3.10): torch and torchvision are not installed.
+# The CUDA build has to match the device's JetPack (2.4 for JetPack 6.0's
+# CUDA 12.2, newer for 6.1/6.2), and PyPI's aarch64 build is CPU-only, so the
+# venv is created with --system-site-packages and uses the JetPack-matched
+# build already installed on the device. Elsewhere, torch comes from PyPI.
+override-dependencies = [
+    "torch>=2.1; sys_platform != 'linux' or platform_machine != 'aarch64' or python_version != '3.10'",
+    "torchvision; sys_platform != 'linux' or platform_machine != 'aarch64' or python_version != '3.10'",
+]
