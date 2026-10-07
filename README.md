@@ -196,7 +196,7 @@ Activate the environment before sourcing ROS. If the environment is already acti
 | `camera_index` | `2`                      | V4L2 index for `source:=camera`. The GMSL dashcam enumerates at `/dev/video2`              |
 | `camera_fps`   | `30.0`                   | Capture rate for `source:=camera` (must be written as a float)                             |
 | `source_delay` | `10.0`                   | Seconds before the source starts, so segmentation has loaded its model                    |
-| `scene`        | `trail`                  | Segmentation prompt set from `perception.scenes` in the config: `trail`, `snow`, `gravel` |
+| `scene`        | `trail`                  | Segmentation prompt set from `perception.scenes` in the config: `trail`, `snow`, `gravel`, `sandy` |
 | `config`       | `config/perception.yaml` | Pipeline config YAML                                                                      |
 | `speed_mps`    | `0.0`                    | Fixed speed given to the planner (must be written as a float)                             |
 | `backend`      | `pytorch`                | Segmentation inference: `pytorch`, or `tensorrt` on an NVIDIA GPU (see [TensorRT](#tensorrt)) |
@@ -257,9 +257,17 @@ YOLOE is prompted with text, and its confidence measures how well the road match
 | -------- | ---------------------------------------------------- | ---------------------------------------------------------------------- |
 | `trail`  | orfd's 5 defaults ("dirt road", "off-road trail", …) | For BeamNG dirt trails. Median best score 0.19 on `test_video.mp4`     |
 | `snow`   | "snow covered road"                                  | Median best score 0.78 on `test_video.mp4`, with a near-identical mask |
-| `gravel` | "gravel road", "gravel path", "dirt road"            | Not yet measured on footage                                            |
+| `gravel` | "gravel road", "gravel path", "dirt road"            | Median best score 0.20 on `demo_route.mp4`; use `sandy` there          |
+| `sandy`  | "sandy gravel path", "sandy path"                    | Light sand and gravel roads. Median best score 0.41 on `demo_route.mp4`, against 0.27 for `trail` |
 
 To add a scene, add a named prompt list under `perception.scenes` in the config. No code changes are needed.
+
+`demo_route.mp4` shows the car's hood, which the planner would otherwise read as part of the scene. Its config, `config/demo_route.yaml`, is `perception.yaml` plus a hood polygon under `beamng.camera.ego_mask`. Keep the two files' other values in step:
+
+```bash
+ros2 launch perception_suite pipeline.launch.py video_path:=demo_route.mp4 \
+    config:=install/perception_suite/share/perception_suite/config/demo_route.yaml scene:=sandy
+```
 
 ### Camera
 
@@ -345,6 +353,7 @@ ros2-perception-suite/
 │       │   └── 6_visualizer_node.py     # orfd AutonomyDashboard window
 │       ├── config/perception.yaml       # Pipeline tuning, camera, scene prompts
 │       ├── config/perception_trt.yaml   # The same, against a prebuilt TensorRT engine
+│       ├── config/demo_route.yaml       # The same, plus demo_route.mp4's hood mask
 │       ├── launch/pipeline.launch.py    # Starts the whole pipeline
 │       ├── setup.py
 │       └── package.xml

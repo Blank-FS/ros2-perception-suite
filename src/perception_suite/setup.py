@@ -12,11 +12,8 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        # Globbed: a config added here must not need a setup.py edit to install.
         ('share/' + package_name + '/config', glob('config/*.yaml')),
-        # Globbed for the same reason as config/: a launch file added here
-        # must not need a setup.py edit to be installed.
-        ('share/' + package_name + '/launch', glob('launch/*.launch.py')),
+        ('share/' + package_name + '/launch', ['launch/pipeline.launch.py']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

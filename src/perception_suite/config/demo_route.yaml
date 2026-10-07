@@ -1,7 +1,10 @@
-# Pipeline config for the ROS stage nodes, read by offroad_autonomy's
-# load_config. Anything not set here takes the PipelineConfig default, not the
-# value in orfd-lane-detection/configs/default.yaml. Values copied from that
-# file keep its tuning; values marked VIDEO describe the test video's camera.
+# perception.yaml for demo_route.mp4, whose dashcam shows the car's hood.
+# Only beamng.camera.ego_mask differs; keep the rest in step with
+# perception.yaml. Values marked VIDEO are still test_video.mp4's guesses.
+#
+#   ros2 launch perception_suite pipeline.launch.py video_path:=demo_route.mp4 \
+#       config:=install/perception_suite/share/perception_suite/config/demo_route.yaml \
+#       scene:=sandy
 
 beamng:
   camera:
@@ -16,10 +19,28 @@ beamng:
       width: 1280
       height: 720
       fov_h: 90.0
-    # Without this, the BeamNG vehicle's hood polygon would be cut out of the
-    # video's frames.
+    # The car's hood across the bottom of demo_route.mp4, traced from the
+    # edges that stay put across the whole video. Normalised (x, y).
     ego_mask:
-      enabled: false
+      enabled: true
+      margin_px: 2
+      polygon:
+        - [0.0, 1.0]
+        - [0.0, 0.6889]
+        - [0.05, 0.725]
+        - [0.1, 0.7556]
+        - [0.15, 0.7806]
+        - [0.2, 0.7972]
+        - [0.25, 0.8111]
+        - [0.35, 0.8111]
+        - [0.5, 0.8111]
+        - [0.65, 0.8083]
+        - [0.75, 0.8028]
+        - [0.85, 0.7861]
+        - [0.9, 0.7611]
+        - [0.95, 0.7333]
+        - [1.0, 0.7028]
+        - [1.0, 1.0]
 
 perception:
   # Run from the workspace root, like the other weight paths in this repo.
