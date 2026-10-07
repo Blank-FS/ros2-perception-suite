@@ -12,7 +12,7 @@ A ROS 2 perception pipeline for real-time drivable terrain segmentation and path
 | `1_video_node`        | BeamNG camera (stand-in)   | `/raw_frames` (bgr8)                                               |
 | `1_camera_node`       | GMSL dashcam (V4L2)        | `/raw_frames` (bgr8), interchangeable with `1_video_node`          |
 | `2_preprocess_node`   | `ImagePreprocessor`        | `/preprocessed_frames` (bgr8, working size)                        |
-| `3_segmentation_node` | `RoadSegmenter` (YOLOE-26) | `/road_mask` (32FC1, road pixels = best detection confidence), `/segmented_frames` (the frames it segmented, for the visualizer) |
+| `3_segmentation_node` | `RoadSegmenter` (YOLOE-26 or a semantic fine-tune) | `/road_mask` (32FC1, road pixels = best detection confidence), `/segmented_frames` (the frames it segmented, for the visualizer) |
 | `4_postprocess_node`  | `TemporalStabilizer`       | `/stabilized_mask` (32FC1)                                         |
 | `5_planner_node`      | `CenterlinePlanner`        | `/path` (`nav_msgs/Path`, metres, x forward, y left)               |
 | `6_visualizer_node`   | `AutonomyDashboard`        | Dashboard window (keys: `0`-`9` debug views, `T` timing, `Q` quit) |
@@ -148,14 +148,28 @@ ros2 launch perception_suite pipeline.launch.py                  # test_video.mp
 ros2 launch perception_suite pipeline.launch.py source:=camera   # GMSL camera
 ```
 
-Add to either:
+Four arguments choose what runs, independently of each other:
+
+| Argument   | Chooses                              | Values                                                       |
+| ---------- | ------------------------------------ | ------------------------------------------------------------ |
+| `config`   | The input's camera and tuning        | `perception.yaml` (default), `demo_route.yaml` (hood masked) |
+| `model`    | The segmentation model               | `yoloe` (default), `semantic` (see [Models](#models))        |
+| `backend`  | How the model runs                   | `pytorch` (default), `tensorrt` (see [TensorRT](#tensorrt))  |
+| `scene`    | YOLOE's prompts                      | `trail` (default), `snow`, `gravel`, `sandy`; ignored by `semantic` |
+
+For example, the fine-tuned model through TensorRT on the demo route:
 
 ```bash
-config:=$(ros2 pkg prefix perception_suite)/share/perception_suite/config/perception_trt.yaml   # TensorRT
+ros2 launch perception_suite pipeline.launch.py config:=demo_route.yaml \
+    video_path:=demo_route.mp4 model:=semantic backend:=tensorrt
+```
+
+Also useful:
+
+```bash
 visualize:=false        # no dashboard, worth ~16 ms/frame
 video_path:=clip.mp4    # a different clip, with source:=video
 camera_index:=0         # a different camera, with source:=camera
-scene:=snow             # another prompt set (no effect on a .engine, see Scenes)
 ```
 
 A single node running stages 2-6 was tried and removed. It did cut the four
@@ -191,25 +205,26 @@ Activate the environment before sourcing ROS. If the environment is already acti
 | -------------- | ------------------------ | ----------------------------------------------------------------------------------------- |
 | `source`       | `video`                  | Input node: `video` or `camera`                                                           |
 | `video_path`   | `test_video.mp4`         | Video file for `source:=video`                                                            |
-| `loop`         | `false`                  | Restart the video at the end instead of stopping, for `source:=video`                     |
+| `loop`         | `true`                   | Restart the video at the end, for `source:=video`. `loop:=false` plays it once and stops   |
 | `video_fps`    | `30.0`                   | Publish rate for `source:=video`. Raise it to find the pipeline's ceiling                 |
 | `camera_index` | `2`                      | V4L2 index for `source:=camera`. The GMSL dashcam enumerates at `/dev/video2`              |
 | `camera_fps`   | `30.0`                   | Capture rate for `source:=camera` (must be written as a float)                             |
 | `source_delay` | `10.0`                   | Seconds before the source starts, so segmentation has loaded its model                    |
-| `scene`        | `trail`                  | Segmentation prompt set from `perception.scenes` in the config: `trail`, `snow`, `gravel`, `sandy` |
-| `config`       | `config/perception.yaml` | Pipeline config YAML                                                                      |
-| `speed_mps`    | `0.0`                    | Fixed speed given to the planner (must be written as a float)                             |
+| `config`       | `perception.yaml`        | Pipeline config for the input: a YAML file name in `src/perception_suite/config` (an absolute path also works) |
+| `model`        | `yoloe`                  | Segmentation model from `perception.models` in the config: `yoloe` or `semantic`           |
 | `backend`      | `pytorch`                | Segmentation inference: `pytorch`, or `tensorrt` on an NVIDIA GPU (see [TensorRT](#tensorrt)) |
+| `scene`        | `trail`                  | YOLOE prompt set from `perception.scenes` in the config: `trail`, `snow`, `gravel`, `sandy`. Ignored by `model:=semantic` |
+| `speed_mps`    | `0.0`                    | Fixed speed given to the planner (must be written as a float)                             |
 | `visualize`    | `true`                   | Open the dashboard window                                                                 |
 
 The dashboard needs a display. Over SSH without X forwarding, launch with `visualize:=false`, or run `export DISPLAY=:0` first to show it on the machine's own screen. Without a display, the visualizer exits with an error and the other nodes keep running.
 
-Run `ros2 launch perception_suite pipeline.launch.py --show-args` to list the arguments. An invalid `source` or `scene` stops the launch before any node starts.
+Run `ros2 launch perception_suite pipeline.launch.py --show-args` to list the arguments. An invalid `config`, `model`, `scene` or `source` stops the launch before any node starts.
 
-`loop` and `video_fps` exist for benchmarking and both default to the previous behaviour.
+`loop` and `video_fps` were added for benchmarking. `video_fps` defaults to the previous behaviour; `loop` defaults to `true`, so a video keeps the pipeline running until you stop it.
 
-A short clip stops feeding the pipeline before a measurement window opens: the ORAD-3D sequences are 243-449 frames, which is 8-15 seconds at 30 FPS, so a benchmark run against one measured a source that had already finished.
-`loop:=true` rewinds instead.
+Without looping, a short clip stops feeding the pipeline before a measurement window opens: the ORAD-3D sequences are 243-449 frames, which is 8-15 seconds at 30 FPS, so a benchmark run against one measured a source that had already finished.
+`loop:=false` restores play-once.
 
 `video_fps` matters because the rate used to be fixed at ~30, which is right for standing in for the camera but hides what the pipeline can do.
 Any model fast enough for 30 FPS measures exactly 30, so `yoloe-26n` and `yoloe-26s` looked identical; uncapped they are 35.7 and 28.9 FPS.
@@ -217,7 +232,7 @@ Set it high (`video_fps:=120.0`) to measure the pipeline rather than the source.
 
 ### TensorRT
 
-`backend:=tensorrt` runs segmentation through a TensorRT engine instead of PyTorch. On an RTX A2000 Laptop GPU with `yoloe-26n-seg` at input size 640, inference took 9.7 ms per frame against 31.8 ms with PyTorch, and the masks matched closely (mean IoU 0.99).
+`backend:=tensorrt` runs segmentation through a TensorRT engine instead of PyTorch, for either model. The config always names `.pt` weights; the engine is built from them. On an RTX A2000 Laptop GPU with `yoloe-26n-seg` at input size 640, inference took 9.7 ms per frame against 31.8 ms with PyTorch, and the masks matched closely (mean IoU 0.99).
 
 It needs an NVIDIA GPU that PyTorch can use and the `tensorrt` extra:
 
@@ -235,23 +250,29 @@ If that fails, install it with `sudo apt install python3-libnvinfer`.
 
 A plain `uv sync` removes the extra again. If TensorRT is not available, the segmentation node exits with the reason rather than falling back to PyTorch, so a comparison never silently measures the wrong backend.
 
-An engine has the scene's prompts and `perception.input_size` compiled in, and only runs on the GPU model and TensorRT version that built it. The first run with a new combination builds one, which takes several minutes. It is cached in the workspace root as `yoloe-26n-seg.<scene>.<hash>.engine` (for example `yoloe-26n-seg.snow.<hash>.engine`) and loads in seconds after that. Frames sent while it builds are dropped, so let the first run finish building, then launch again, or give it time with `source_delay:=600.0`.
+An engine has `perception.input_size` and, for YOLOE, the scene's prompts compiled in, and only runs on the GPU model and TensorRT version that built it. The first run with a new combination builds one, which takes several minutes (about 6 on the Jetson). It is cached in the workspace root next to the weights and loads in seconds after that:
+
+| Model      | Cached engine                                   |
+| ---------- | ----------------------------------------------- |
+| `yoloe`    | `yoloe-26n-seg.<scene>.<hash>.engine`, one per scene |
+| `semantic` | `looped1-1-yolo26n-sem-t1.<hash>.engine`, one for every scene |
+ Frames sent while it builds are dropped, so let the first run finish building, then launch again, or give it time with `source_delay:=600.0`.
 
 To compare the two backends, launch each in turn on the same video and read the dashboard's FPS and latency. Without the dashboard, run `ros2 topic hz /road_mask` for the segmentation rate. The pipeline cannot run faster than the 30 FPS video, so once TensorRT outruns the source, latency shows the difference better than FPS.
 
-On a Jetson, building an engine takes longer than on a desktop GPU, so give the first run a long `source_delay` or launch twice. The Jetson path has not been tested yet.
+On a Jetson, building an engine takes longer than on a desktop GPU, so give the first run a long `source_delay` or launch twice.
 
-To run a single stage on its own, use `ros2 run perception_suite <node>`, e.g. `ros2 run perception_suite 3_segmentation_node`. Without a scene, the segmentation node uses orfd's default prompts (the `trail` set).
+To run a single stage on its own, use `ros2 run perception_suite <node>`. The nodes take the same `config`, `model`, `scene` and `backend` parameters, with the same defaults, e.g. `ros2 run perception_suite 3_segmentation_node --ros-args -p model:=semantic -p backend:=tensorrt`.
 
 ---
 
 ## Configuration
 
-All tuning lives in [config/perception.yaml](src/perception_suite/config/perception.yaml), which `offroad_autonomy`'s `load_config` reads. Any key it leaves out takes orfd's built-in default. To use another file, pass `config:=<path>` to the launch file, or `--ros-args -p config:=<path>` to a single node.
+A config describes the input: its camera, its tuning, and the models and scenes `model:=` and `scene:=` choose from. There are two, which differ only in `beamng.camera.ego_mask`: [perception.yaml](src/perception_suite/config/perception.yaml) for `test_video.mp4` and the camera, and [demo_route.yaml](src/perception_suite/config/demo_route.yaml) for `demo_route.mp4`. Keep their other values in step. `offroad_autonomy`'s `load_config` reads them. Any key it leaves out takes orfd's built-in default. To use another file in that folder, pass its name: `config:=<name>.yaml` to the launch file, or `--ros-args -p config:=<name>.yaml` to a single node. Names are always looked up in `src/perception_suite/config`, whichever directory you launch from; a file outside it needs an absolute path. New and edited files there take effect without rebuilding, because the build uses `--symlink-install`.
 
 ### Scenes
 
-YOLOE is prompted with text, and its confidence measures how well the road matches that text. The planner rejects frames whose best confidence is below `planning.gate.confidence_threshold` (0.20). So prompts that don't describe the scene stall the planner, even when the mask itself is right.
+YOLOE is prompted with text, and its confidence measures how well the road matches that text. The planner rejects frames whose best confidence is below the model's `gate_confidence_threshold` (0.20 for `yoloe`). So prompts that don't describe the scene stall the planner, even when the mask itself is right.
 
 | Scene    | Prompts                                              | Notes                                                                  |
 | -------- | ---------------------------------------------------- | ---------------------------------------------------------------------- |
@@ -260,14 +281,31 @@ YOLOE is prompted with text, and its confidence measures how well the road match
 | `gravel` | "gravel road", "gravel path", "dirt road"            | Median best score 0.20 on `demo_route.mp4`; use `sandy` there          |
 | `sandy`  | "sandy gravel path", "sandy path"                    | Light sand and gravel roads. Median best score 0.41 on `demo_route.mp4`, against 0.27 for `trail` |
 
-To add a scene, add a named prompt list under `perception.scenes` in the config. No code changes are needed.
+To add a scene, add a named prompt list under `perception.scenes` in both configs. No code changes are needed. `model:=semantic` ignores scenes.
 
-`demo_route.mp4` shows the car's hood, which the planner would otherwise read as part of the scene. Its config, `config/demo_route.yaml`, is `perception.yaml` plus a hood polygon under `beamng.camera.ego_mask`. Keep the two files' other values in step:
+`demo_route.mp4` shows the car's hood, which the planner would otherwise read as part of the scene, so run it with `demo_route.yaml`:
 
 ```bash
 ros2 launch perception_suite pipeline.launch.py video_path:=demo_route.mp4 \
-    config:=install/perception_suite/share/perception_suite/config/demo_route.yaml scene:=sandy
+    config:=demo_route.yaml scene:=sandy
 ```
+
+### Models
+
+`model:=` picks an entry from `perception.models` in the config. Each entry names its weights, relative to the workspace root, and its `gate_confidence_threshold`, which replaces `planning.gate.confidence_threshold` because what a confidence means depends on the model:
+
+| Model      | Weights                         | Gate threshold | Notes |
+| ---------- | ------------------------------- | -------------- | ----- |
+| `yoloe`    | `yoloe-26n-seg.pt`              | 0.20           | Open-vocabulary, prompted with `scene:=`. Downloaded on first run |
+| `semantic` | `looped1-1-yolo26n-sem-t1.pt`   | 0.0            | YOLO26n fine-tuned for traversable road (`task="semantic"`). Put the `.pt` in the workspace root |
+
+The semantic model differs from YOLOE in three ways, handled by orfd's `RoadSegmenter` and its config entry:
+
+- **No prompts.** Its classes (`background`, `traversable-roads`) are fixed, so `scene:=` is ignored, and its TensorRT engine is built once for every scene.
+- **No confidence.** It outputs a class map, not scored detections, so `RoadSegmenter` reports 1.0 on every frame. Its gate threshold is 0.0; `min_mask_area`, `min_road_pixels` and the anchor check gate it instead. `RoadSegmenter` warns at startup if a semantic model runs with a threshold above zero.
+- **Needs Ultralytics 8.4.155 or later**, which `pyproject.toml` requires. 8.4.23 cannot unpickle the checkpoint (`Can't get attribute 'SemanticSegmentationModel'`).
+
+To add a model, add an entry under `perception.models` in both configs.
 
 ### Camera
 
@@ -344,15 +382,16 @@ ros2-perception-suite/
 │   └── perception_suite/
 │       ├── perception_suite/
 │       │   ├── common.py                # Config loading, QoS, mask encoding
+│       │   ├── settings.py              # Resolves config:=, model:= and scene:=
+│       │   ├── engine.py                # Builds and caches TensorRT engines
 │       │   ├── 1_video_node.py          # Reads video file → /raw_frames
 │       │   ├── 1_camera_node.py         # Reads a V4L2 camera → /raw_frames
 │       │   ├── 2_preprocess_node.py     # Resize + CLAHE → /preprocessed_frames
-│       │   ├── 3_segmentation_node.py   # YOLOE-26 → /road_mask
+│       │   ├── 3_segmentation_node.py   # YOLOE-26 or semantic model → /road_mask
 │       │   ├── 4_postprocess_node.py    # EMA + morphology → /stabilized_mask
 │       │   ├── 5_planner_node.py        # Gate + centreline → /path
 │       │   └── 6_visualizer_node.py     # orfd AutonomyDashboard window
-│       ├── config/perception.yaml       # Pipeline tuning, camera, scene prompts
-│       ├── config/perception_trt.yaml   # The same, against a prebuilt TensorRT engine
+│       ├── config/perception.yaml       # Camera, tuning, models and scene prompts
 │       ├── config/demo_route.yaml       # The same, plus demo_route.mp4's hood mask
 │       ├── launch/pipeline.launch.py    # Starts the whole pipeline
 │       ├── setup.py

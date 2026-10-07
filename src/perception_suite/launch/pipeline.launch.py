@@ -7,20 +7,21 @@
     ros2 launch perception_suite pipeline.launch.py scene:=snow
     ros2 launch perception_suite pipeline.launch.py visualize:=false
     ros2 launch perception_suite pipeline.launch.py backend:=tensorrt
+    ros2 launch perception_suite pipeline.launch.py model:=semantic backend:=tensorrt
+    ros2 launch perception_suite pipeline.launch.py config:=demo_route.yaml video_path:=demo_route.mp4
 
-Run it from the workspace root, where the relative video and weight paths
-point.
+config:= is the input (a YAML file name in src/perception_suite/config),
+model:= the segmentation model, backend:= how it runs and scene:= its prompts;
+see perception_suite/settings.py. Run it from the workspace root, where the
+relative video and weight paths point.
 """
 
-import os
-
-import yaml
-from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction, TimerAction
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from perception_suite import settings
 
 # Source name -> (executable, launch arguments it takes as parameters).
 # A new input (camera, beamng) is one entry here plus its node.
@@ -30,27 +31,18 @@ SOURCES = {
 }
 
 
-def _scene_prompts(context):
-    config_path = LaunchConfiguration('config').perform(context)
-    with open(config_path, encoding='utf-8') as fh:
-        raw = yaml.safe_load(fh) or {}
-    scenes = raw.get('perception', {}).get('scenes', {})
-    name = LaunchConfiguration('scene').perform(context)
-    if name not in scenes:
-        raise ValueError(
-            f"scene must be one of {sorted(scenes)} (perception.scenes in {config_path}), "
-            f"got '{name}'")
-    return [str(prompt) for prompt in scenes[name]]
-
-
 def _validated(context):
     """Everything that can reject an argument, run before any stage starts."""
+    path = settings.resolve(LaunchConfiguration('config').perform(context))
+    settings.model(path, LaunchConfiguration('model').perform(context))
+    settings.scene_prompts(path, LaunchConfiguration('scene').perform(context))
+    parameters = {'config': LaunchConfiguration('config'),
+                  'model': LaunchConfiguration('model'),
+                  'scene': LaunchConfiguration('scene'),
+                  'backend': LaunchConfiguration('backend')}
     segmentation = Node(
         package='perception_suite', executable='3_segmentation_node', output='screen',
-        parameters=[{'config': LaunchConfiguration('config'),
-                     'prompts': _scene_prompts(context),
-                     'scene': LaunchConfiguration('scene'),
-                     'backend': LaunchConfiguration('backend')}])
+        parameters=[parameters])
     return [segmentation] + _source(context)
 
 
@@ -69,9 +61,7 @@ def _source(context):
 
 
 def generate_launch_description():
-    default_config = os.path.join(
-        get_package_share_directory('perception_suite'), 'config', 'perception.yaml')
-    config = {'config': LaunchConfiguration('config')}
+    config = {'config': LaunchConfiguration('config'), 'model': LaunchConfiguration('model')}
 
     def stage(executable, extra=None, **kwargs):
         parameters = [config]
@@ -92,17 +82,22 @@ def generate_launch_description():
                               description='capture rate for source:=camera'),
         DeclareLaunchArgument('video_path', default_value='test_video.mp4',
                               description='Video file for source:=video'),
-        DeclareLaunchArgument('loop', default_value='false',
+        DeclareLaunchArgument('loop', default_value='true',
                               description='Restart the video at the end instead of '
-                                          'stopping, for source:=video'),
+                                          'stopping, for source:=video; false plays it once'),
         DeclareLaunchArgument('video_fps', default_value='30.0',
                               description='Publish rate for source:=video; raise it '
                                           'to measure the pipeline ceiling'),
-        DeclareLaunchArgument('config', default_value=default_config,
-                              description='offroad_autonomy pipeline config YAML'),
-        DeclareLaunchArgument('scene', default_value='trail',
-                              description='Segmentation prompt set from perception.scenes '
-                                          'in the config (e.g. trail, snow, gravel)'),
+        DeclareLaunchArgument('config', default_value=settings.DEFAULT_CONFIG,
+                              description='Pipeline config for the input: a YAML file '
+                                          'name in src/perception_suite/config'),
+        DeclareLaunchArgument('model', default_value=settings.DEFAULT_MODEL,
+                              description='Segmentation model from perception.models in '
+                                          'the config: yoloe or semantic'),
+        DeclareLaunchArgument('scene', default_value=settings.DEFAULT_SCENE,
+                              description='YOLOE prompt set from perception.scenes in the '
+                                          'config (e.g. trail, snow, sandy); ignored by '
+                                          'the semantic model'),
         DeclareLaunchArgument('backend', default_value='pytorch',
                               choices=['pytorch', 'tensorrt'],
                               description='Segmentation inference: pytorch, or tensorrt '
@@ -111,7 +106,8 @@ def generate_launch_description():
                               description='Fixed vehicle speed given to the planner'),
         DeclareLaunchArgument('visualize', default_value='true',
                               description='Open the visualizer window'),
-        # First, so a bad source or scene fails before any stage node starts.
+        # First, so a bad config, model, scene or source fails before any
+        # stage node starts.
         OpaqueFunction(function=_validated),
         stage('2_preprocess_node'),
         stage('4_postprocess_node'),
