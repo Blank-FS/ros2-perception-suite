@@ -2,6 +2,8 @@
 
     ros2 launch perception_suite pipeline.launch.py
     ros2 launch perception_suite pipeline.launch.py source:=video video_path:=other.mp4
+    ros2 launch perception_suite pipeline.launch.py source:=camera
+    ros2 launch perception_suite pipeline.launch.py source:=camera camera_index:=0
     ros2 launch perception_suite pipeline.launch.py scene:=snow
     ros2 launch perception_suite pipeline.launch.py visualize:=false
     ros2 launch perception_suite pipeline.launch.py backend:=tensorrt
@@ -23,7 +25,8 @@ from launch_ros.actions import Node
 # Source name -> (executable, launch arguments it takes as parameters).
 # A new input (camera, beamng) is one entry here plus its node.
 SOURCES = {
-    'video': ('1_video_node', ['video_path']),
+    'video': ('1_video_node', ['video_path', 'loop', 'video_fps']),
+    'camera': ('1_camera_node', ['camera_index', 'camera_fps']),
 }
 
 
@@ -82,8 +85,19 @@ def generate_launch_description():
                               description=f'Input node: {", ".join(sorted(SOURCES))}'),
         DeclareLaunchArgument('source_delay', default_value='10.0',
                               description='Seconds to wait before starting the source'),
+        DeclareLaunchArgument('camera_index', default_value='2',
+                              description='V4L2 index for source:=camera; the GMSL '
+                                          'dashcam enumerates at /dev/video2'),
+        DeclareLaunchArgument('camera_fps', default_value='30.0',
+                              description='capture rate for source:=camera'),
         DeclareLaunchArgument('video_path', default_value='test_video.mp4',
                               description='Video file for source:=video'),
+        DeclareLaunchArgument('loop', default_value='false',
+                              description='Restart the video at the end instead of '
+                                          'stopping, for source:=video'),
+        DeclareLaunchArgument('video_fps', default_value='30.0',
+                              description='Publish rate for source:=video; raise it '
+                                          'to measure the pipeline ceiling'),
         DeclareLaunchArgument('config', default_value=default_config,
                               description='offroad_autonomy pipeline config YAML'),
         DeclareLaunchArgument('scene', default_value='trail',
