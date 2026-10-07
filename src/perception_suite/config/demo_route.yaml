@@ -83,7 +83,14 @@ preprocessing:
   # Half the published frame, so the aspect matches the sensor above.
   target_width: 640
   target_height: 360
-  enable_clahe: true
+  # Off: measured on 2026-10-07. CLAHE cost accuracy on every model and
+  # split tried (semantic @640 -0.016 test / -0.014 valid, @1024 -0.007 /
+  # -0.009, yoloe-26m -0.022) by trading recall for precision: precision rose
+  # 0.944 -> 0.959 while recall fell 0.932 -> 0.902, so it found LESS road,
+  # which is the wrong direction for a planner that needs a corridor. At
+  # runtime on HATCI bag footage it also cost 8.6 ms p50 and 37% more
+  # perception-gate rejections, over three reps per arm.
+  enable_clahe: false
   clahe_clip_limit: 2.0
   clahe_grid_size: 8
 
