@@ -29,6 +29,7 @@ setup(
     entry_points={
     'console_scripts': [
         '1_video_node = perception_suite.1_video_node:main',
+        '1_camera_node = perception_suite.1_camera_node:main',
         '2_preprocess_node = perception_suite.2_preprocess_node:main',
         '3_segmentation_node = perception_suite.3_segmentation_node:main',
         '4_postprocess_node = perception_suite.4_postprocess_node:main',

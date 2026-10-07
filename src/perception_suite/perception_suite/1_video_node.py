@@ -17,6 +17,11 @@ class VideoPublisher(Node):
         # Downscaled for DDS bandwidth only; the working size is set by the
         # preprocess stage. Aspect is kept so the camera model stays square-pixel.
         self.width = self.declare_parameter("width", 1280).value
+        # The launch file performs its substitutions, so this arrives as a
+        # string rather than a bool.
+        self.loop = str(
+            self.declare_parameter("loop", "false").value).strip().lower() in (
+            "1", "true", "yes", "y", "on")
         self.publisher_ = self.create_publisher(Image, "raw_frames", 10)
         self.cap = cv2.VideoCapture(video_path)
         if not self.cap.isOpened():
@@ -24,13 +29,24 @@ class VideoPublisher(Node):
             raise RuntimeError(f"Cannot open video '{video_path}'")
         self.get_logger().info(f"Playing '{video_path}'")
         self.bridge = CvBridge()
-        self.timer = self.create_timer(0.033, self.timer_callback)  # ~30 FPS
+        # ~30 FPS by default, to stand in for the camera. A throughput
+        # benchmark raises this so the pipeline, not the source, is the limit.
+        fps = float(self.declare_parameter("video_fps", "30.0").value)
+        self.timer = self.create_timer(1.0 / fps, self.timer_callback)
 
     def timer_callback(self):
         ret, frame = self.cap.read()
         if not ret:
-            self.get_logger().info("End of video", once=True)
-            return
+            if not self.loop:
+                self.get_logger().info("End of video", once=True)
+                return
+            # Rewind. A benchmark run outlasts any single clip, and the
+            # alternative is measuring a source that has stopped publishing.
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            ret, frame = self.cap.read()
+            if not ret:
+                self.get_logger().warn("Cannot rewind video", once=True)
+                return
         h, w = frame.shape[:2]
         height = round(h * self.width / w)
         small_frame = cv2.resize(

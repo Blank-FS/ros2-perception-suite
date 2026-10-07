@@ -82,6 +82,23 @@ class VisualizationNode(Node):
             queue_size=10,
         )
         self.sync.registerCallback(self.display_callback)
+        # Show something straight away: nothing reaches display_callback until
+        # the source has waited source_delay and the segmenter has loaded its
+        # model, which is 10-20s of blank screen otherwise.
+        #
+        # WND_PROP_VISIBLE is only honoured once it has reported a visible
+        # window at least once (see display_callback). OpenCV's GTK3 build
+        # returns -1 for it unconditionally, which is "not implemented", not
+        # "closed"; taking it at face value shuts the dashboard down on its
+        # first frame on any such build.
+        self._visibility_reliable = False
+        splash = np.zeros((360, 640, 3), np.uint8)
+        cv2.putText(splash, 'waiting for the pipeline...', (40, 190),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (220, 220, 220), 2)
+        cv2.imshow(WINDOW, splash)
+        for _ in range(10):
+            cv2.waitKey(30)
+
         self.get_logger().info(
             'Keys: T timing overlay, Q quit, '
             + ' '.join(f'{i}={name}' for i, name in DEBUG_VIEW_KEYS.items()))
@@ -107,7 +124,13 @@ class VisualizationNode(Node):
 
         cv2.imshow(WINDOW, canvas)
         key = cv2.waitKey(1) & 0xFF
-        closed = cv2.getWindowProperty(WINDOW, cv2.WND_PROP_VISIBLE) < 1
+        # -1 means the build does not implement this property (OpenCV's GTK3
+        # build does exactly that), so it cannot be distinguished from a closed
+        # window on its own. Trust it only after it has once reported visible.
+        visible = cv2.getWindowProperty(WINDOW, cv2.WND_PROP_VISIBLE)
+        if visible >= 1:
+            self._visibility_reliable = True
+        closed = self._visibility_reliable and visible < 1
         if closed or key in (27, ord('q')):
             self.get_logger().info('Dashboard closed')
             rclpy.try_shutdown()

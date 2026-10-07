@@ -1,0 +1,93 @@
+# TensorRT variant of perception.yaml: identical except for model_weights.
+#
+# Pipeline config for the ROS stage nodes, read by offroad_autonomy's
+# load_config. Anything not set here takes the PipelineConfig default, not the
+# value in orfd-lane-detection/configs/default.yaml. Values copied from that
+# file keep its tuning; values marked VIDEO describe the test video's camera.
+
+beamng:
+  camera:
+    # VIDEO: camera height and pitch are guesses. Only the planner's
+    # image-to-ground mapping reads them.
+    height_m: 1.5
+    pitch_deg: 0.0
+    # VIDEO: the frame as video_node publishes it (1280 wide, 16:9).
+    # fov_h is a guess until the camera is known; the planner's metres and
+    # its ROI both depend on it.
+    sensor:
+      width: 1280
+      height: 720
+      fov_h: 90.0
+    # Without this, the BeamNG vehicle's hood polygon would be cut out of the
+    # video's frames.
+    ego_mask:
+      enabled: false
+
+perception:
+  # A prebuilt TensorRT 10.3 engine, exported on this Jetson with the trail
+  # prompts baked in. ultralytics detects the .engine suffix and loads it
+  # through the TensorRT backend, so backend:=pytorch is still correct here:
+  # that argument selects whether the NODE builds an engine, not what the
+  # weights are.
+  #
+  # An engine fixes its prompts and input size at export. scene:= has no
+  # effect on it; re-export to change prompts.
+  # Relative to the directory the launch runs in, like perception.yaml's
+  # weights path. It was an absolute container path during benchmarking; that
+  # only resolved inside one image, so it is relative here.
+  model_weights: "yoloe-26n-seg.engine"
+  segmentation_threshold: 0.15
+  input_size: 640
+  # Prompt sets by scene, picked with the launch argument scene:=<name>.
+  # YOLOE scores how well the road matches the text, and the planner's gate
+  # drops frames below planning.gate.confidence_threshold, so prompts that do
+  # not describe the scene stall the planner even when the mask is right.
+  # Without a scene (ros2 run), orfd's defaults are used: the trail set.
+  scenes:
+    # orfd-lane-detection's defaults, for BeamNG dirt trails.
+    trail:
+      - "traversable road"
+      - "dirt road"
+      - "off-road trail"
+      - "drivable terrain"
+      - "gravel path"
+    # On test_video.mp4 (26n): median best score 0.78, against 0.19 for trail,
+    # with a near-identical mask. "road" and "rural road" alone find nothing.
+    snow:
+      - "snow covered road"
+    # Not yet measured on footage.
+    gravel:
+      - "gravel road"
+      - "gravel path"
+      - "dirt road"
+
+preprocessing:
+  # Half the published frame, so the aspect matches the sensor above.
+  target_width: 640
+  target_height: 360
+  enable_clahe: true
+  clahe_clip_limit: 2.0
+  clahe_grid_size: 8
+
+postprocessing:
+  enable_morphology: false
+  enable_ema: false
+  ema_alpha: 0.7
+  min_mask_area_fraction: 0.001
+  morphology_kernel_size: 5
+
+planning:
+  mode: baseline
+  # VIDEO: with pitch 0 the horizon is mid-frame, so 0.45 stops just below it
+  # (about 27 m ahead at the guessed height and FOV).
+  roi_height: 0.45
+  baseline_temporal_blend: 0.4
+  baseline_max_shift_m: 0.5
+  gate:
+    confidence_threshold: 0.20
+    min_mask_area: 0.05
+    hold_frames: 10
+    hold_speed_scale: 0.4
+  centerline_samples: 20
+  # 2000 at 720x465 in default.yaml, scaled to 640x360.
+  min_road_pixels: 1400

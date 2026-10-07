@@ -10,6 +10,7 @@ A ROS 2 perception pipeline for real-time drivable terrain segmentation and path
 | Node                  | Wraps (`offroad_autonomy`) | Publishes                                                          |
 | --------------------- | -------------------------- | ------------------------------------------------------------------ |
 | `1_video_node`        | BeamNG camera (stand-in)   | `/raw_frames` (bgr8)                                               |
+| `1_camera_node`       | GMSL dashcam (V4L2)        | `/raw_frames` (bgr8), interchangeable with `1_video_node`          |
 | `2_preprocess_node`   | `ImagePreprocessor`        | `/preprocessed_frames` (bgr8, working size)                        |
 | `3_segmentation_node` | `RoadSegmenter` (YOLOE-26) | `/road_mask` (32FC1, road pixels = best detection confidence), `/segmented_frames` (the frames it segmented, for the visualizer) |
 | `4_postprocess_node`  | `TemporalStabilizer`       | `/stabilized_mask` (32FC1)                                         |
@@ -138,6 +139,44 @@ On the first run, the model weights (`yoloe-26n-seg.pt`) and the YOLOE text enco
 
 ## Running
 
+### Which command
+
+Two inputs, one stack:
+
+```bash
+ros2 launch perception_suite pipeline.launch.py                  # test_video.mp4
+ros2 launch perception_suite pipeline.launch.py source:=camera   # GMSL camera
+```
+
+Add to either:
+
+```bash
+config:=$(ros2 pkg prefix perception_suite)/share/perception_suite/config/perception_trt.yaml   # TensorRT
+visualize:=false        # no dashboard, worth ~16 ms/frame
+video_path:=clip.mp4    # a different clip, with source:=video
+camera_index:=0         # a different camera, with source:=camera
+scene:=snow             # another prompt set (no effect on a .engine, see Scenes)
+```
+
+A single node running stages 2-6 was tried and removed. It did cut the four
+image topics between stages, but it was slower: on the demo route it reached
+20.8-27.7 FPS against the six-node stack's ~30, which is the source rate. Six
+processes pipeline across the Jetson's eight cores, so while segmentation works
+on one frame the preprocessor is already on the next; one callback makes that
+sequential. The copying it saved was smaller than the parallelism it lost.
+
+Measured per stage on the live camera with a TensorRT `yoloe-26n` engine:
+
+```
+segmentation 23 ms   preprocess 7 ms   postprocess 3 ms   planning 1 ms   control 0 ms
+```
+
+`planning` is 1 ms only while the perception gate is rejecting; pointed at road
+it rises to 11-16 ms. Choosing the grid planner over the baseline costs under
+0.3 FPS, so it is a behaviour decision rather than a performance one.
+
+### Running
+
 Run from the workspace root, because the video and model weight paths are relative to it. In each new terminal:
 
 ```bash
@@ -150,8 +189,12 @@ Activate the environment before sourcing ROS. If the environment is already acti
 
 | Argument       | Default                  | What it does                                                                              |
 | -------------- | ------------------------ | ----------------------------------------------------------------------------------------- |
-| `source`       | `video`                  | Input node. Only `video` exists so far                                                    |
+| `source`       | `video`                  | Input node: `video` or `camera`                                                           |
 | `video_path`   | `test_video.mp4`         | Video file for `source:=video`                                                            |
+| `loop`         | `false`                  | Restart the video at the end instead of stopping, for `source:=video`                     |
+| `video_fps`    | `30.0`                   | Publish rate for `source:=video`. Raise it to find the pipeline's ceiling                 |
+| `camera_index` | `2`                      | V4L2 index for `source:=camera`. The GMSL dashcam enumerates at `/dev/video2`              |
+| `camera_fps`   | `30.0`                   | Capture rate for `source:=camera` (must be written as a float)                             |
 | `source_delay` | `10.0`                   | Seconds before the source starts, so segmentation has loaded its model                    |
 | `scene`        | `trail`                  | Segmentation prompt set from `perception.scenes` in the config: `trail`, `snow`, `gravel`, `sandy` |
 | `config`       | `config/perception.yaml` | Pipeline config YAML                                                                      |
@@ -162,6 +205,15 @@ Activate the environment before sourcing ROS. If the environment is already acti
 The dashboard needs a display. Over SSH without X forwarding, launch with `visualize:=false`, or run `export DISPLAY=:0` first to show it on the machine's own screen. Without a display, the visualizer exits with an error and the other nodes keep running.
 
 Run `ros2 launch perception_suite pipeline.launch.py --show-args` to list the arguments. An invalid `source` or `scene` stops the launch before any node starts.
+
+`loop` and `video_fps` exist for benchmarking and both default to the previous behaviour.
+
+A short clip stops feeding the pipeline before a measurement window opens: the ORAD-3D sequences are 243-449 frames, which is 8-15 seconds at 30 FPS, so a benchmark run against one measured a source that had already finished.
+`loop:=true` rewinds instead.
+
+`video_fps` matters because the rate used to be fixed at ~30, which is right for standing in for the camera but hides what the pipeline can do.
+Any model fast enough for 30 FPS measures exactly 30, so `yoloe-26n` and `yoloe-26s` looked identical; uncapped they are 35.7 and 28.9 FPS.
+Set it high (`video_fps:=120.0`) to measure the pipeline rather than the source.
 
 ### TensorRT
 
@@ -223,9 +275,58 @@ The planner fits its path on the ground in metres, using the camera's field of v
 
 ---
 
+## Live camera (Jetson, GMSL)
+
+`source:=camera` reads a V4L2 device instead of a file:
+
+```bash
+ros2 launch perception_suite pipeline.launch.py source:=camera
+ros2 launch perception_suite pipeline.launch.py source:=camera camera_index:=0 camera_fps:=20.0
+```
+
+The node asks the sensor for 1920x1080, then downscales to `width` (1280) keeping the aspect, exactly as `1_video_node` does, so stages 2-6 cannot tell the two apart. If the driver returns a different mode it logs a warning rather than failing, because the aspect it lands on is what the camera model is built from.
+
+Note that `beamng.camera.sensor` in the config describes the **published** frame, not the sensor's native resolution. With the defaults that is 1280x720.
+
+### Bringing the camera up
+
+The dashcam needs the Neousys deserializers initialised before any `/dev/video*` appears. On this Jetson that is a systemd unit:
+
+```bash
+systemctl status nru-camera     # should be "active"
+ls /dev/video*                  # video0..video3 once it is up
+```
+
+If `/dev/video*` is missing, nothing in userspace can help; check `dmesg | grep nru2mp` first.
+
+### Device tree: UYVY bit depth
+
+The Neousys device tree declares the cameras as `csi_pixel_bit_depth = "8"`, counting bits per *component*. NVIDIA's `tegra-camera.ko` builds a format name of `<mode_type>_<pixel_phase><csi_pixel_bit_depth>` and only ships `yuv_uyvy16`, `yuv_vyuy16`, `yuv_yuyv16` and `yuv_yvyu16`, counting bits per *pixel*. So the stock module rejects the stock device tree:
+
+```
+nru2mp 2-0070: Unsupported pixel format
+nru2mp 2-0070: Failed to read mode0 image props
+nru2mp: probe of 2-0070 failed with error -22
+```
+
+A device tree with `16` in those eight properties probes cleanly against the stock module (`Detected NRU2MP sensor`). This Jetson boots such a tree through an `FDT` line in `/boot/extlinux/extlinux.conf`; the original `primary` entry is untouched and still selectable.
+
+This only matters on a board whose vendor BSP has been overwritten, for example by an `apt` upgrade, which replaces vendor-patched modules at package-owned paths without dpkg noticing.
+
+### Running the camera in a container
+
+The Tegra capture path needs far more than `/dev/video*`: `capture-vi-channel*`, `capture-isp-channel*`, `nvhost-ctrl-vi*`, `nvmap` and `tegra_camera_ctrl`. Passing only `--device /dev/video2` opens the device but every read times out with `select() timeout`. Mount the whole node tree:
+
+```bash
+docker run --rm --runtime nvidia --network host --ipc=host --privileged \
+  -v /dev:/dev ...
+```
+
+---
+
 ## Extending
 
-**A new input** (camera, BeamNG):
+**A new input** (BeamNG). `1_camera_node` was added this way and is the worked example:
 
 1. Write a node that publishes `bgr8` images on `/raw_frames`, with `header.stamp` set.
 2. Register it in `setup.py`.
@@ -244,12 +345,14 @@ ros2-perception-suite/
 │       ├── perception_suite/
 │       │   ├── common.py                # Config loading, QoS, mask encoding
 │       │   ├── 1_video_node.py          # Reads video file → /raw_frames
+│       │   ├── 1_camera_node.py         # Reads a V4L2 camera → /raw_frames
 │       │   ├── 2_preprocess_node.py     # Resize + CLAHE → /preprocessed_frames
 │       │   ├── 3_segmentation_node.py   # YOLOE-26 → /road_mask
 │       │   ├── 4_postprocess_node.py    # EMA + morphology → /stabilized_mask
 │       │   ├── 5_planner_node.py        # Gate + centreline → /path
 │       │   └── 6_visualizer_node.py     # orfd AutonomyDashboard window
 │       ├── config/perception.yaml       # Pipeline tuning, camera, scene prompts
+│       ├── config/perception_trt.yaml   # The same, against a prebuilt TensorRT engine
 │       ├── config/demo_route.yaml       # The same, plus demo_route.mp4's hood mask
 │       ├── launch/pipeline.launch.py    # Starts the whole pipeline
 │       ├── setup.py
