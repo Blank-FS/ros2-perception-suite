@@ -26,13 +26,13 @@ class PostprocessNode(Node):
             Image, 'road_mask', self.on_mask, LATEST_ONLY)
 
     def on_mask(self, msg):
-        mask, confidence = decode_mask(self.bridge.imgmsg_to_cv2(msg, '32FC1'))
+        mask, confidence = decode_mask(self.bridge.imgmsg_to_cv2(msg, 'mono8'))
         perception = PerceptionResult(
             mask=mask, confidences=[confidence], valid_roi=self.valid_roi)
         stabilized = self.stabilizer.stabilize(perception)
         self.get_logger().debug(f'stability={stabilized.stability_score:.3f}')
 
-        out = self.bridge.cv2_to_imgmsg(encode_mask(stabilized.mask, confidence), '32FC1')
+        out = self.bridge.cv2_to_imgmsg(encode_mask(stabilized.mask, confidence), 'mono8')
         out.header = msg.header
         self.publisher.publish(out)
 

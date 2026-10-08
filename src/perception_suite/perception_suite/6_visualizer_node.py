@@ -65,6 +65,15 @@ class VisualizationNode(Node):
         # status bar, so the window is a plain frame like orfd's on Windows.
         cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO | cv2.WINDOW_GUI_NORMAL)
         cv2.resizeWindow(WINDOW, self.dashboard.width, self.dashboard.height)
+        # Placement, which OpenCV otherwise leaves to the window manager: the
+        # same code lands bottom-left under Docker and top-left under a venv.
+        # -1 keeps that behaviour, so this is opt-in and cannot push the window
+        # off a smaller screen than the one it was tuned on.
+        win_x = int(self.declare_parameter('window_x', -1).value)
+        win_y = int(self.declare_parameter('window_y', -1).value)
+        if win_x >= 0 and win_y >= 0:
+            cv2.moveWindow(WINDOW, win_x, win_y)
+            self.get_logger().info(f'Dashboard window at {win_x},{win_y}')
         self.debug_view = config.ui_debug_view
         self.timing_overlay = config.ui_timing_overlay
         self.stats = RuntimeStats()
@@ -122,6 +131,16 @@ class VisualizationNode(Node):
         )
         self.stats.record('dashboard_render', (time.perf_counter() - t0) * 1000.0)
 
+        # The rate shown ON the dashboard, which is this node's rate and not the
+        # /path rate: they diverge when the visualizer falls behind, and only
+        # this one is what anyone watching the screen actually sees.
+        self._viz_n = getattr(self, '_viz_n', 0) + 1
+        if self._viz_n % 60 == 0:
+            self.get_logger().info(
+                f'render rate {self.stats.fps():.1f} FPS | '
+                f'capture-to-display {self.stats.stage("latency").mean_ms:.1f} ms | '
+                f'render {self.stats.stage("dashboard_render").mean_ms:.1f} ms')
+
         cv2.imshow(WINDOW, canvas)
         key = cv2.waitKey(1) & 0xFF
         # -1 means the build does not implement this property (OpenCV's GTK3
@@ -140,8 +159,8 @@ class VisualizationNode(Node):
     def _step_result(self, frame_msg, raw_mask_msg, mask_msg, path_msg):
         image = self.bridge.imgmsg_to_cv2(frame_msg, 'bgr8')
         h, w = image.shape[:2]
-        raw_mask, confidence = decode_mask(self.bridge.imgmsg_to_cv2(raw_mask_msg, '32FC1'))
-        mask, _ = decode_mask(self.bridge.imgmsg_to_cv2(mask_msg, '32FC1'))
+        raw_mask, confidence = decode_mask(self.bridge.imgmsg_to_cv2(raw_mask_msg, 'mono8'))
+        mask, _ = decode_mask(self.bridge.imgmsg_to_cv2(mask_msg, 'mono8'))
 
         perception = PerceptionResult(
             mask=raw_mask,
