@@ -22,14 +22,15 @@ beamng:
       # Measured, not a guess. Drives focal_px, and so every
       # distance the planner projects to the ground.
       fov_h: 120.0
-    # The car's hood across the bottom of demo_route.mp4, traced from the
-    # edges that stay put across the whole video. Normalised (x, y).
+    # The car's hood across the bottom of the frame. Flat at 0.67, which
+    # masks the bottom 33%: at 0.81 it covered only 19% and left bodywork
+    # in view, where the segmenter can call it road. Normalised (x, y).
     ego_mask:
       enabled: true
       margin_px: 2
       polygon:
-        - [0.0, 0.81]
-        - [1.0, 0.81]
+        - [0.0, 0.67]
+        - [1.0, 0.67]
         - [1.0, 1.0]
         - [0.0, 1.0]
 
