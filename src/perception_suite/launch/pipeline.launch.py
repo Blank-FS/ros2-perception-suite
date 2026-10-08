@@ -54,7 +54,12 @@ def _source(context):
     parameters = {arg: LaunchConfiguration(arg).perform(context) for arg in arguments}
     # perform() yields a string and both source nodes declare `width` with an
     # integer default, which rclpy rejects with InvalidParameterTypeException.
-    parameters['width'] = int(parameters['width'])
+    # perform() always yields a string, and the two source nodes disagree on the
+    # type they declare: 1_video_node uses an integer default, 1_camera_node a
+    # string one. rclpy rejects a mismatch with InvalidParameterTypeException,
+    # so coerce to whatever this source expects rather than to one type for both.
+    parameters['width'] = (str(parameters['width']) if name == 'camera'
+                           else int(parameters['width']))
     node = Node(package='perception_suite', executable=executable, name='source_node',
                 parameters=[parameters], output='screen')
     # Frames sent while the segmenter is still loading its model are dropped,
