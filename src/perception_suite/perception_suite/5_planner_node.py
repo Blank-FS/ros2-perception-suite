@@ -36,7 +36,7 @@ class PlannerNode(Node):
             Image, 'stabilized_mask', self.on_mask, LATEST_ONLY)
 
     def on_mask(self, msg):
-        mask, confidence = decode_mask(self.bridge.imgmsg_to_cv2(msg, '32FC1'))
+        mask, confidence = decode_mask(self.bridge.imgmsg_to_cv2(msg, 'mono8'))
         stabilized = StabilizedResult(
             mask=mask,
             raw_result=PerceptionResult(
