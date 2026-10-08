@@ -26,8 +26,8 @@ from perception_suite import settings
 # Source name -> (executable, launch arguments it takes as parameters).
 # A new input (camera, beamng) is one entry here plus its node.
 SOURCES = {
-    'video': ('1_video_node', ['video_path', 'loop', 'video_fps']),
-    'camera': ('1_camera_node', ['camera_index', 'camera_fps']),
+    'video': ('1_video_node', ['video_path', 'loop', 'video_fps', 'width']),
+    'camera': ('1_camera_node', ['camera_index', 'camera_fps', 'width']),
 }
 
 
@@ -52,6 +52,14 @@ def _source(context):
         raise ValueError(f"source must be one of {sorted(SOURCES)}, got '{name}'")
     executable, arguments = SOURCES[name]
     parameters = {arg: LaunchConfiguration(arg).perform(context) for arg in arguments}
+    # perform() yields a string and both source nodes declare `width` with an
+    # integer default, which rclpy rejects with InvalidParameterTypeException.
+    # perform() always yields a string, and the two source nodes disagree on the
+    # type they declare: 1_video_node uses an integer default, 1_camera_node a
+    # string one. rclpy rejects a mismatch with InvalidParameterTypeException,
+    # so coerce to whatever this source expects rather than to one type for both.
+    parameters['width'] = (str(parameters['width']) if name == 'camera'
+                           else int(parameters['width']))
     node = Node(package='perception_suite', executable=executable, name='source_node',
                 parameters=[parameters], output='screen')
     # Frames sent while the segmenter is still loading its model are dropped,
@@ -80,6 +88,15 @@ def generate_launch_description():
                                           'dashcam enumerates at /dev/video2'),
         DeclareLaunchArgument('camera_fps', default_value='30.0',
                               description='capture rate for source:=camera'),
+        DeclareLaunchArgument('width', default_value='1280',
+                              description='Width the source publishes. Nothing between '
+                                          'the source and 2_preprocess_node reads the '
+                                          'larger frame, so setting this to the working '
+                                          'width removes a resample and 4x the bytes'),
+        DeclareLaunchArgument('window_x', default_value='-1',
+                              description='Dashboard window position; -1 leaves it to '
+                                          'the window manager'),
+        DeclareLaunchArgument('window_y', default_value='-1'),
         DeclareLaunchArgument('video_path', default_value='test_video.mp4',
                               description='Video file for source:=video'),
         DeclareLaunchArgument('loop', default_value='true',
@@ -112,5 +129,8 @@ def generate_launch_description():
         stage('2_preprocess_node'),
         stage('4_postprocess_node'),
         stage('5_planner_node', {'speed_mps': LaunchConfiguration('speed_mps')}),
-        stage('6_visualizer_node', condition=IfCondition(LaunchConfiguration('visualize'))),
+        stage('6_visualizer_node',
+              {'window_x': LaunchConfiguration('window_x'),
+               'window_y': LaunchConfiguration('window_y')},
+              condition=IfCondition(LaunchConfiguration('visualize'))),
     ])

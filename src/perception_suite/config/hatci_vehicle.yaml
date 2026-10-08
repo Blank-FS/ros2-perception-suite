@@ -1,5 +1,5 @@
 # perception.yaml for demo_route.mp4, whose dashcam shows the car's hood.
-# Only beamng.camera.ego_mask differs; keep the rest in step with
+# The HATCI demo vehicle. Keep the rest in step with
 # perception.yaml. Values marked VIDEO are still test_video.mp4's guesses.
 #
 #   ros2 launch perception_suite pipeline.launch.py video_path:=demo_route.mp4 \
@@ -16,21 +16,23 @@ beamng:
     # fov_h is a guess until the camera is known; the planner's metres and
     # its ROI both depend on it.
     sensor:
-      # The GMSL dashcam as it enumerates at /dev/video2.
-      width: 1920
-      height: 1080
-      # Measured, not a guess. Drives focal_px, and so every
-      # distance the planner projects to the ground.
-      fov_h: 120.0
-    # The car's hood across the bottom of the frame. Flat at 0.67, which
-    # masks the bottom 33%: at 0.81 it covered only 19% and left bodywork
-    # in view, where the segmenter can call it road. Normalised (x, y).
+      # The camera on the HATCI vehicle, as recorded in the bag files. A
+      # DIFFERENT lens from the bench GMSL dashcam: 2880x1860 at 80.1 deg,
+      # not 1920x1080 at 120. Confusing the two gives the planner distances
+      # wrong by about a third.
+      width: 2880
+      height: 1860
+      fov_h: 80.1
+    # The HATCI vehicle's hood, flat at its highest point. A traced curve sat
+    # at 0.63 at the edges and 0.67 at the centre, so it masked MORE at the
+    # edges - exactly where the planner needs road. Flat at 0.63 still covers
+    # the whole hood. Normalised (x, y).
     ego_mask:
       enabled: true
       margin_px: 2
       polygon:
-        - [0.0, 0.67]
-        - [1.0, 0.67]
+        - [0.0, 0.63]
+        - [1.0, 0.63]
         - [1.0, 1.0]
         - [0.0, 1.0]
 
@@ -90,8 +92,11 @@ perception:
 
 preprocessing:
   # Half the published frame, so the aspect matches the sensor above.
+  # 640 wide to match the engine's 640x640 input, so the frame letterboxes
+  # with no further rescaling; 720 was being resampled twice. 413 keeps the
+  # 2880x1860 sensor's 1.548 aspect. Best IoU of five sizes tried, both splits.
   target_width: 640
-  target_height: 360
+  target_height: 413
   # Off: measured on 2026-10-07. CLAHE cost accuracy on every model and
   # split tried (semantic @640 -0.016 test / -0.014 valid, @1024 -0.007 /
   # -0.009, yoloe-26m -0.022) by trading recall for precision: precision rose
@@ -124,4 +129,7 @@ planning:
     hold_speed_scale: 0.4
   centerline_samples: 20
   # 2000 at 720x465 in default.yaml, scaled to 640x360.
-  min_road_pixels: 1400
+  # An ABSOLUTE count, so it must track the working resolution: 2000 at
+  # 720x465 scaled by area to 640x413. Leaving it unscaled silently tightens
+  # the gate - rejections went 50 to 68 before this was caught.
+  min_road_pixels: 1579

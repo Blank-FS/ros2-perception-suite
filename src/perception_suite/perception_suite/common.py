@@ -1,6 +1,6 @@
 """Helpers shared by the pipeline stage nodes.
 
-Masks travel between stages as 32FC1 images whose road pixels hold the
+Masks travel between stages as mono8 images whose road pixels hold the
 frame's best detection confidence. That keeps the one number the perception
 gate reads attached to the mask it belongs to, without a custom message
 package.
@@ -41,8 +41,19 @@ def load_pipeline_config(node: Node) -> PipelineConfig:
 
 
 def encode_mask(mask: np.ndarray, confidence: float) -> np.ndarray:
-    return mask.astype(np.float32) * np.float32(confidence)
+    """Road mask plus a frame-wide confidence, packed into one mono8 image.
+
+    The confidence is the pixel level, so 0 means "not road". A non-zero
+    confidence that rounds to 0 is clamped to 1, otherwise a real but very low
+    confidence would be indistinguishable from background and the whole mask
+    would decode as empty.
+    """
+    level = int(round(float(confidence) * 255.0))
+    level = min(255, max(0, level))
+    if level == 0 and confidence > 0.0:
+        level = 1
+    return np.asarray(mask, dtype=bool).astype(np.uint8) * np.uint8(level)
 
 
 def decode_mask(confidence_mask: np.ndarray) -> tuple[np.ndarray, float]:
-    return confidence_mask > 0.0, float(confidence_mask.max(initial=0.0))
+    return confidence_mask > 0, float(confidence_mask.max(initial=0)) / 255.0

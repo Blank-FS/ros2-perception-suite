@@ -83,7 +83,7 @@ class SegmentationNode(Node):
         # Published even when empty, so every segmented frame reaches the
         # planner and the visualizer.
         confidence = max(result.confidences, default=0.0)
-        out = self.bridge.cv2_to_imgmsg(encode_mask(result.mask, confidence), '32FC1')
+        out = self.bridge.cv2_to_imgmsg(encode_mask(result.mask, confidence), 'mono8')
         out.header = msg.header
         self.publisher.publish(out)
         self.frame_publisher.publish(msg)
