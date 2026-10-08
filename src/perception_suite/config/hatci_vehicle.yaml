@@ -1,0 +1,135 @@
+# perception.yaml for demo_route.mp4, whose dashcam shows the car's hood.
+# The HATCI demo vehicle. Keep the rest in step with
+# perception.yaml. Values marked VIDEO are still test_video.mp4's guesses.
+#
+#   ros2 launch perception_suite pipeline.launch.py video_path:=demo_route.mp4 \
+#       config:=demo_route.yaml \
+#       scene:=sandy
+
+beamng:
+  camera:
+    # VIDEO: camera height and pitch are guesses. Only the planner's
+    # image-to-ground mapping reads them.
+    height_m: 1.5
+    pitch_deg: 0.0
+    # VIDEO: the frame as video_node publishes it (1280 wide, 16:9).
+    # fov_h is a guess until the camera is known; the planner's metres and
+    # its ROI both depend on it.
+    sensor:
+      # The camera on the HATCI vehicle, as recorded in the bag files. A
+      # DIFFERENT lens from the bench GMSL dashcam: 2880x1860 at 80.1 deg,
+      # not 1920x1080 at 120. Confusing the two gives the planner distances
+      # wrong by about a third.
+      width: 2880
+      height: 1860
+      fov_h: 80.1
+    # The HATCI vehicle's hood, flat at its highest point. A traced curve sat
+    # at 0.63 at the edges and 0.67 at the centre, so it masked MORE at the
+    # edges - exactly where the planner needs road. Flat at 0.63 still covers
+    # the whole hood. Normalised (x, y).
+    ego_mask:
+      enabled: true
+      margin_px: 2
+      polygon:
+        - [0.0, 0.63]
+        - [1.0, 0.63]
+        - [1.0, 1.0]
+        - [0.0, 1.0]
+
+perception:
+  # Segmentation models, picked with the launch argument model:=<name>. Each
+  # gives its weights (relative to the workspace root, where the launch runs)
+  # and its own planning.gate.confidence_threshold, which depends on what the
+  # model's confidence means. backend:=tensorrt builds and caches an engine
+  # from the weights on first use, so these stay .pt files.
+  models:
+    # YOLOE-26n, open-vocabulary: prompted with scene:=, and its confidence is
+    # how well the road matches the prompts.
+    yoloe:
+      weights: "yoloe-26n-seg.pt"
+      gate_confidence_threshold: 0.20
+    # YOLO26n fine-tuned for traversable road (task="semantic", classes
+    # background and traversable-roads). Fixed classes, so scene:= does not
+    # apply. It has no per-detection score, so RoadSegmenter reports 1.0 on
+    # every frame and any threshold above 0 would pass regardless of the mask:
+    # min_mask_area, min_road_pixels and the anchor check gate it instead.
+    semantic:
+      weights: "looped1-1-yolo26n-sem-t1.pt"
+      gate_confidence_threshold: 0.0
+  segmentation_threshold: 0.15
+  input_size: 640
+  # YOLOE prompt sets by scene, picked with the launch argument scene:=<name>
+  # (default trail). YOLOE scores how well the road matches the text, and the
+  # planner's gate drops frames below the model's gate_confidence_threshold,
+  # so prompts that do not describe the scene stall the planner even when the
+  # mask is right. The semantic model ignores them.
+  scenes:
+    # orfd-lane-detection's defaults, for BeamNG dirt trails.
+    trail:
+      - "traversable road"
+      - "dirt road"
+      - "off-road trail"
+      - "drivable terrain"
+      - "gravel path"
+    # On test_video.mp4 (26n): median best score 0.78, against 0.19 for trail,
+    # with a near-identical mask. "road" and "rural road" alone find nothing.
+    snow:
+      - "snow covered road"
+    # On demo_route.mp4 (26n): median best score 0.20, passing the gate on
+    # 52% of frames. Use sandy there.
+    gravel:
+      - "gravel road"
+      - "gravel path"
+      - "dirt road"
+    # Light sand and gravel roads, as in demo_route.mp4 (26n): median best
+    # score 0.41 and 89% of frames past the gate, against 0.27 and 75% for
+    # trail. YOLOE sees this surface as a path: "dirt road", "gravel road"
+    # and "unpaved road" alone each pass on under 10% of frames. Adding
+    # "drivable terrain" barely raises the score but spreads onto lawns.
+    sandy:
+      - "sandy gravel path"
+      - "sandy path"
+
+preprocessing:
+  # Half the published frame, so the aspect matches the sensor above.
+  # 640 wide to match the engine's 640x640 input, so the frame letterboxes
+  # with no further rescaling; 720 was being resampled twice. 413 keeps the
+  # 2880x1860 sensor's 1.548 aspect. Best IoU of five sizes tried, both splits.
+  target_width: 640
+  target_height: 413
+  # Off: measured on 2026-10-07. CLAHE cost accuracy on every model and
+  # split tried (semantic @640 -0.016 test / -0.014 valid, @1024 -0.007 /
+  # -0.009, yoloe-26m -0.022) by trading recall for precision: precision rose
+  # 0.944 -> 0.959 while recall fell 0.932 -> 0.902, so it found LESS road,
+  # which is the wrong direction for a planner that needs a corridor. At
+  # runtime on HATCI bag footage it also cost 8.6 ms p50 and 37% more
+  # perception-gate rejections, over three reps per arm.
+  enable_clahe: false
+  clahe_clip_limit: 2.0
+  clahe_grid_size: 8
+
+postprocessing:
+  enable_morphology: false
+  enable_ema: false
+  ema_alpha: 0.7
+  min_mask_area_fraction: 0.001
+  morphology_kernel_size: 5
+
+planning:
+  mode: baseline
+  # VIDEO: with pitch 0 the horizon is mid-frame, so 0.45 stops just below it
+  # (about 27 m ahead at the guessed height and FOV).
+  roi_height: 0.45
+  baseline_temporal_blend: 0.4
+  baseline_max_shift_m: 0.5
+  gate:
+    # confidence_threshold is per model: perception.models.<name>.gate_confidence_threshold.
+    min_mask_area: 0.05
+    hold_frames: 10
+    hold_speed_scale: 0.4
+  centerline_samples: 20
+  # 2000 at 720x465 in default.yaml, scaled to 640x360.
+  # An ABSOLUTE count, so it must track the working resolution: 2000 at
+  # 720x465 scaled by area to 640x413. Leaving it unscaled silently tightens
+  # the gate - rejections went 50 to 68 before this was caught.
+  min_road_pixels: 1579
