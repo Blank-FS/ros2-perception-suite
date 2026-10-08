@@ -5,32 +5,43 @@ from dataclasses import replace
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
-from rclpy.parameter import Parameter
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
 from offroad_autonomy.perception.perception_view import PerceptionView
 from offroad_autonomy.perception.road_segmenter import RoadSegmenter
 from offroad_autonomy.types import FramePacket
 
-from perception_suite import engine
+from perception_suite import engine, settings
 from perception_suite.common import LATEST_ONLY, encode_mask, load_pipeline_config
 
 
 class SegmentationNode(Node):
-    """Stage 3: YOLOE-26 road segmentation (RoadSegmenter), publishing /road_mask."""
+    """Stage 3: road segmentation (RoadSegmenter), publishing /road_mask.
+
+    RoadSegmenter takes either a prompted YOLOE-26 model (task="segment") or a
+    fine-tuned semantic segmentation model (task="semantic"), which has fixed
+    classes, ignores the prompts and reports a confidence of 1.0.
+    """
 
     def __init__(self):
         super().__init__('segmentation_node')
         config = load_pipeline_config(self)
-        # Set by the launch file from the config's perception.scenes.
-        prompts = self.declare_parameter('prompts', Parameter.Type.STRING_ARRAY).value
-        if prompts:
-            config = replace(config, perception_prompts=list(prompts))
-        # Only names the TensorRT engine file; the prompts are what count.
-        self.scene = self.declare_parameter('scene', '').value
-        self.get_logger().info(f'Prompts: {config.perception_prompts}')
+        # The scene's prompts, from the config's perception.scenes. A semantic
+        # model has fixed classes and ignores them.
+        self.scene = self.declare_parameter('scene', settings.DEFAULT_SCENE).value
+        if engine.model_task(config.model_weights) == 'semantic':
+            self.get_logger().info(
+                f"Semantic segmentation model: fixed classes, scene '{self.scene}' ignored")
+            self.scene = ''
+        else:
+            path = settings.resolve(self.get_parameter('config').value)
+            prompts = settings.scene_prompts(path, self.scene)
+            if prompts is not None:
+                config = replace(config, perception_prompts=prompts)
+            self.get_logger().info(f"Scene '{self.scene}': {config.perception_prompts}")
         # pytorch runs the weights as they are; tensorrt runs an engine built
-        # from them, much faster on an NVIDIA GPU but fixed to the prompts.
+        # from them and cached, much faster on an NVIDIA GPU but fixed to the
+        # prompts, so each scene gets its own.
         backend = self.declare_parameter('backend', 'pytorch').value
         if backend == 'tensorrt':
             config = replace(config, model_weights=str(self._engine(config)))
