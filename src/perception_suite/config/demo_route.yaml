@@ -3,7 +3,7 @@
 # perception.yaml. Values marked VIDEO are still test_video.mp4's guesses.
 #
 #   ros2 launch perception_suite pipeline.launch.py video_path:=demo_route.mp4 \
-#       config:=install/perception_suite/share/perception_suite/config/demo_route.yaml \
+#       config:=demo_route.yaml \
 #       scene:=sandy
 
 beamng:
@@ -16,42 +16,50 @@ beamng:
     # fov_h is a guess until the camera is known; the planner's metres and
     # its ROI both depend on it.
     sensor:
-      width: 1280
-      height: 720
-      fov_h: 90.0
+      # The GMSL dashcam as it enumerates at /dev/video2.
+      width: 1920
+      height: 1080
+      # Measured, not a guess. Drives focal_px, and so every
+      # distance the planner projects to the ground.
+      fov_h: 120.0
     # The car's hood across the bottom of demo_route.mp4, traced from the
     # edges that stay put across the whole video. Normalised (x, y).
     ego_mask:
       enabled: true
       margin_px: 2
       polygon:
-        - [0.0, 1.0]
-        - [0.0, 0.6889]
-        - [0.05, 0.725]
-        - [0.1, 0.7556]
-        - [0.15, 0.7806]
-        - [0.2, 0.7972]
-        - [0.25, 0.8111]
-        - [0.35, 0.8111]
-        - [0.5, 0.8111]
-        - [0.65, 0.8083]
-        - [0.75, 0.8028]
-        - [0.85, 0.7861]
-        - [0.9, 0.7611]
-        - [0.95, 0.7333]
-        - [1.0, 0.7028]
+        - [0.0, 0.81]
+        - [1.0, 0.81]
         - [1.0, 1.0]
+        - [0.0, 1.0]
 
 perception:
-  # Run from the workspace root, like the other weight paths in this repo.
-  model_weights: "yoloe-26n-seg.pt"
+  # Segmentation models, picked with the launch argument model:=<name>. Each
+  # gives its weights (relative to the workspace root, where the launch runs)
+  # and its own planning.gate.confidence_threshold, which depends on what the
+  # model's confidence means. backend:=tensorrt builds and caches an engine
+  # from the weights on first use, so these stay .pt files.
+  models:
+    # YOLOE-26n, open-vocabulary: prompted with scene:=, and its confidence is
+    # how well the road matches the prompts.
+    yoloe:
+      weights: "yoloe-26n-seg.pt"
+      gate_confidence_threshold: 0.20
+    # YOLO26n fine-tuned for traversable road (task="semantic", classes
+    # background and traversable-roads). Fixed classes, so scene:= does not
+    # apply. It has no per-detection score, so RoadSegmenter reports 1.0 on
+    # every frame and any threshold above 0 would pass regardless of the mask:
+    # min_mask_area, min_road_pixels and the anchor check gate it instead.
+    semantic:
+      weights: "looped1-1-yolo26n-sem-t1.pt"
+      gate_confidence_threshold: 0.0
   segmentation_threshold: 0.15
   input_size: 640
-  # Prompt sets by scene, picked with the launch argument scene:=<name>.
-  # YOLOE scores how well the road matches the text, and the planner's gate
-  # drops frames below planning.gate.confidence_threshold, so prompts that do
-  # not describe the scene stall the planner even when the mask is right.
-  # Without a scene (ros2 run), orfd's defaults are used: the trail set.
+  # YOLOE prompt sets by scene, picked with the launch argument scene:=<name>
+  # (default trail). YOLOE scores how well the road matches the text, and the
+  # planner's gate drops frames below the model's gate_confidence_threshold,
+  # so prompts that do not describe the scene stall the planner even when the
+  # mask is right. The semantic model ignores them.
   scenes:
     # orfd-lane-detection's defaults, for BeamNG dirt trails.
     trail:
@@ -109,7 +117,7 @@ planning:
   baseline_temporal_blend: 0.4
   baseline_max_shift_m: 0.5
   gate:
-    confidence_threshold: 0.20
+    # confidence_threshold is per model: perception.models.<name>.gate_confidence_threshold.
     min_mask_area: 0.05
     hold_frames: 10
     hold_speed_scale: 0.4

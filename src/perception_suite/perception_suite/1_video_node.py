@@ -20,7 +20,7 @@ class VideoPublisher(Node):
         # The launch file performs its substitutions, so this arrives as a
         # string rather than a bool.
         self.loop = str(
-            self.declare_parameter("loop", "false").value).strip().lower() in (
+            self.declare_parameter("loop", "true").value).strip().lower() in (
             "1", "true", "yes", "y", "on")
         self.publisher_ = self.create_publisher(Image, "raw_frames", 10)
         self.cap = cv2.VideoCapture(video_path)
