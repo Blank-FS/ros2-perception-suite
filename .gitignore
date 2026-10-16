@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 .venv/
+.env
 .pytest_cache/
 .uv/
 
@@ -26,3 +27,8 @@ log/
 *.log
 *.tmp
 *.mp4
+
+# Evaluation datasets and outputs (model/testing)
+model/testing/datasets/
+model/testing/runs/
+model/testing/recordings/

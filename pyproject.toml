@@ -5,12 +5,14 @@ description = "Perception and planning ROS2 stack for autonomous vehicles"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "av>=17.1.0",
     "clip",
     "colcon-common-extensions>=0.3.0",
     "colcon-ros>=0.5.0",
     "numpy<2.0",
     "offroad-autonomy",
     "opencv-python>=4.11.0.86",
+    "python-dotenv>=1.2.3",
     "ultralytics>=8.4.155",
 ]
 

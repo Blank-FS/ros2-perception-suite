@@ -374,6 +374,12 @@ docker run --rm --runtime nvidia --network host --ipc=host --privileged \
 
 ---
 
+## Model evaluation
+
+[model/testing/](model/testing/README.md) scores the semantic segmentation weights in `model/weights/` against Roboflow ground truth labels (road IoU, precision and recall), and measures how often the perception gate would reject frames on a recorded drive. Its README covers the setup: the weights, a Roboflow API key in `model/testing/.env`, and the drive video.
+
+---
+
 ## Project structure
 
 ```
@@ -396,6 +402,9 @@ ros2-perception-suite/
 │       ├── launch/pipeline.launch.py    # Starts the whole pipeline
 │       ├── setup.py
 │       └── package.xml
+├── model/
+│   ├── weights/                         # Fine-tuned .pt weights (not in git)
+│   └── testing/                         # Evaluation and gate sweep; see its README
 ├── pyproject.toml                       # uv project; pulls in ../orfd-lane-detection
 └── README.md
 ```
