@@ -65,6 +65,9 @@ RING_SLOTS = 2 * INBOX_FRAMES
 # Frames segmented together: each GPU call costs a few ms of Python launch
 # overhead whatever its size, so a batch shares it.
 BATCH = 4
+# A frame whose road mask overlaps the previous frame's by less than this IoU
+# counts as unstable.
+UNSTABLE = 0.9
 # PerceptionGate's reasons, by how they start, as summary column names.
 REJECT_REASONS = {
     "too few road pixels": "too few road pixels",
@@ -253,8 +256,13 @@ def gate_worker(config_path, name, labels, own, ring_spec, inbox, outbox):
         for label, mask in masks(levels, labels).items():
             if label in stabilizers:
                 perception = PerceptionResult(mask=mask & valid_roi, confidences=[1.0], valid_roi=valid_roi)
-                d = gate.evaluate(stabilizers[label].stabilize(perception))
-                results.append(((name, label), index, seconds, d.ok, d.reason, d.road_pixels, d.area_fraction))
+                stabilized = stabilizers[label].stabilize(perception)
+                d = gate.evaluate(stabilized)
+                # stability_score is the IoU of this frame's road mask with the previous frame's.
+                results.append(
+                    ((name, label), index, seconds, d.ok, d.reason, d.road_pixels, d.area_fraction,
+                     stabilized.stability_score)
+                )
         outbox.put(results)
     del ring
     memory.close()
@@ -279,11 +287,15 @@ def longest_run(flags):
 
 
 def summarize(weights, threshold, decisions, stride):
-    """One summary row from (frame index, seconds, ok, reason, road pixels, area) for one model and threshold.
+    """One summary row from (frame index, seconds, ok, reason, road pixels, area, stability) per frame.
 
     Besides the rejections, it records the margin: the fewest road pixels and
     smallest road area of any frame, which show how close the drive came to
-    the gate's limits even when nothing was rejected.
+    the gate's limits even when nothing was rejected. And the stability: how
+    much the road mask changes from one frame to the next, as IoU, since
+    flicker in the mask turns into jitter in the path. The road genuinely
+    moves as the car drives, so it is for comparing models on the same video,
+    not an absolute score.
     """
     rejected = [not ok for _, _, ok, *_ in decisions]
     streak, start = longest_run(rejected)
@@ -298,7 +310,16 @@ def summarize(weights, threshold, decisions, stride):
         "min_road_pixels": min((d[4] for d in decisions), default=0),
         "min_road_area": round(min((d[5] for d in decisions), default=0.0), 4),
         "tightest_at_s": "",
+        "stability_mean": "",
+        "stability_p5": "",
+        "unstable_frames": "",
     }
+    # The first frame has nothing to compare with.
+    stability = np.array([d[6] for d in decisions[1:]], float) if len(decisions) > 1 else np.array([])
+    if len(stability):
+        row["stability_mean"] = round(float(stability.mean()), 4)
+        row["stability_p5"] = round(float(np.percentile(stability, 5)), 4)
+        row["unstable_frames"] = round(float((stability < UNSTABLE).mean()), 4)
     if decisions:
         tightest = min(decisions, key=lambda d: d[5])
         row["tightest_at_s"] = round(tightest[1], 2)
@@ -322,7 +343,9 @@ def save_report(rows, run_dir):
     note = (
         "threshold is the road probability a pixel needs to count as road; argmax is the mask the pipeline "
         "uses today. Streak lengths are in recorded frames, and streak_starts_s is where the longest one begins. "
-        "min_road_pixels and min_road_area are the closest any frame came to the gate's limits, at tightest_at_s."
+        "min_road_pixels and min_road_area are the closest any frame came to the gate's limits, at tightest_at_s. "
+        "stability is the IoU of each frame's road mask with the previous frame's (higher is steadier); "
+        "unstable_frames is the share below 0.9."
     )
     return write_report(
         rows,
@@ -331,7 +354,7 @@ def save_report(rows, run_dir):
         "reject_rate",
         note,
         filters=("weights", "threshold"),
-        lower_is_better={c for c in rows[0] if c.startswith(("reject", "longest", "rejects/"))},
+        lower_is_better={c for c in rows[0] if c.startswith(("reject", "longest", "rejects/", "unstable"))},
         identity=("threshold", "frames", "streak_starts_s", "tightest_at_s"),
     )
 
@@ -499,10 +522,15 @@ def main():
     run_dir.mkdir(parents=True, exist_ok=True)
     with open(run_dir / "frames.csv", "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["weights", "threshold", "frame", "time_s", "ok", "reason", "road_pixels", "area_fraction"])
+        writer.writerow(
+            ["weights", "threshold", "frame", "time_s", "ok", "reason", "road_pixels", "area_fraction", "stability"]
+        )
         for (name, label), entries in decisions.items():
-            for index, seconds, ok, reason, road_pixels, area in entries:
-                writer.writerow([name, label, index, f"{seconds:.3f}", int(ok), reason, road_pixels, f"{area:.4f}"])
+            for index, seconds, ok, reason, road_pixels, area, stability in entries:
+                writer.writerow(
+                    [name, label, index, f"{seconds:.3f}", int(ok), reason, road_pixels, f"{area:.4f}",
+                     f"{stability:.4f}"]
+                )
     with open(run_dir / "summary.csv", "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=list(rows[0]))
         writer.writeheader()

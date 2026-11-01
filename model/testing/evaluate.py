@@ -1,37 +1,44 @@
 """Evaluate the semantic segmentation weights against a ground truth dataset.
 
-Runs Ultralytics validation for each model in model/weights (or the ones given)
-on one dataset from download_dataset.py, then prints and saves a side-by-side
-comparison of mIoU, pixel accuracy, per-class IoU and inference speed.
+Runs each model in model/weights (or the ones given) over one dataset from
+download_dataset.py and compares its prediction with the labels, pixel by
+pixel, at the labels' own resolution: the model's output is scaled up to the
+image, never the labels down to the network, which alone would cost about 2.5
+points of IoU.
 
     python model/testing/evaluate.py --data model/testing/datasets/final_demo-vokml-v6/data.yaml
-    python model/testing/evaluate.py --data ... --split all --weights model/weights/yolo26n-demo-route.pt
+    python model/testing/evaluate.py --data model/testing/datasets/week-8-vos-v1/data.yaml --split test \
+        --static-crop none
 
 By default every split is scored on its own and then all of them together
 ("all"). Images the models were trained on score higher than new ones, so the
 test and val rows are the honest estimate and "all" is an upper bound.
 
-Images and masks first go through the preprocessing the models were trained
-with in Roboflow: a static crop to the top 66% of the frame, which cuts off the
-car's hood, then a fit into 1024x1024 with black edges. The edges are left out
-of the scores. --static-crop and --resize change or disable either step, to
-match a different Roboflow version.
+Images first get the preprocessing the models were trained with in Roboflow:
+a static crop (default: the top 66% of the frame, which cuts off the car's
+hood) and a fit into the model's square input with black edges. A version
+Roboflow exported with its preprocessing already applied is recognised by its
+black edges, which are left out of the scores; pass --static-crop none for it.
+--ego-mask leaves out the polygon from beamng.camera.ego_mask in a pipeline
+config, as the pipeline does after inference; with --static-crop none it
+scores the whole frame the way the pipeline runs today.
 
---ego-mask additionally leaves out the polygon from beamng.camera.ego_mask in
-a pipeline config, as the pipeline does after inference. Together with
---static-crop none --resize none it scores the models the way the pipeline
-runs them today: the whole frame, with the hood masked afterwards.
+Per class, besides background:
+  IoU, precision, recall, dice  pooled over every scored pixel of the split
+                                (dice is the F1 of precision and recall)
+  img_IoU_mean/_p5/_min         the spread of each image's own IoU, for the
+                                frames where a model does badly
+  img_IoU<0.9                   the share of images below 0.9 IoU
+  HD95_px, HD95_px_p95          how far the predicted edge strays from the
+                                labelled one, in pixels: the 95th percentile
+                                of edge distances per image (mean over images,
+                                and its 95th percentile)
+plus mIoU over all classes, pixel accuracy and the network's time per image.
 
-The headline number is IoU/traversable_road: of the pixels that are road in
-the labels or the prediction, the share both agree on. precision/ and recall/
-split its errors into road painted where there is none and road missed. mIoU
-averages the IoU with IoU/background, which is high for any model since most
-of the frame is not road. All are pooled over every pixel of the split.
-
-Ultralytics' per-model output (confusion matrix, IoU bar chart, example
-predictions) goes to model/testing/runs/<dataset>/<weights>-<split>/, and the
-comparison to model/testing/runs/<dataset>/summary.csv and report.html, a page
-that filters and sorts the results. --report-only rebuilds report.html from the
+Results go to model/testing/runs/<dataset>/: summary.csv and report.html with
+one row per model and split, and <weights>-<split>/ with images.csv (every
+image's numbers) and overlays of the worst images (green: road found, red:
+road invented, blue: road missed). --report-only rebuilds report.html from the
 existing summary.csv without evaluating, for working on the page.
 """
 
@@ -40,6 +47,7 @@ import csv
 import html
 import json
 import sys
+import time
 from pathlib import Path
 
 import cv2
@@ -94,64 +102,293 @@ def fit_black_edges(image, size, interpolation, fill):
     )
 
 
-def prepare(root, dirs, out, crop, resize, polygon):
-    """Write every split's images and masks to out/{images,masks}/<split>, preprocessed for evaluation.
+def black_edges(image, level=2):
+    """The picture area of an image letterboxed with pure black bands, as a boolean mask, or None.
 
-    The ego mask polygon, normalised to the full frame, is applied before the
-    crop; the crop is in percent of the frame, as Roboflow gives it.
+    Roboflow's "Fit (black edges)" centres the picture, so it pads two
+    opposite sides about equally with black. A real frame can have a black
+    band along one edge (under the hood), but not matching ones on both.
     """
-    prepared = {}
-    for split, image_dir in dirs.items():
-        (out / "images" / split).mkdir(parents=True, exist_ok=True)
-        (out / "masks" / split).mkdir(parents=True, exist_ok=True)
-        for image_file in sorted(Path(image_dir).iterdir()):
-            mask_file = root / "masks" / split / f"{image_file.stem}.png"
-            image = cv2.imread(str(image_file))
-            mask = cv2.imread(str(mask_file), cv2.IMREAD_UNCHANGED)
-            if image is None or mask is None:
+    rows = np.flatnonzero(image.max(axis=(1, 2)) > level)
+    cols = np.flatnonzero(image.max(axis=(0, 2)) > level)
+    h, w = image.shape[:2]
+    if len(rows) == 0:
+        return None
+    top, bottom, left, right = rows[0], h - 1 - rows[-1], cols[0], w - 1 - cols[-1]
+    # Nearly equal, not exactly: the export's rounding and JPEG noise at the
+    # border move the edges by a few pixels (288 and 299 rows in week-8-vos).
+    letterboxed = min(top, bottom) > 0 and abs(top - bottom) <= 0.02 * h
+    pillarboxed = min(left, right) > 0 and abs(left - right) <= 0.02 * w
+    if not (letterboxed or pillarboxed):
+        return None
+    inside = np.zeros((h, w), bool)
+    inside[rows[0] : rows[-1] + 1, cols[0] : cols[-1] + 1] = True
+    return inside
+
+
+def load_sample(image_file, mask_file, crop, polygon):
+    """An image and its mask, cropped, with the pixels that must not be scored set to IGNORE.
+
+    Those are the hood (polygon, normalised to the full frame) and the black
+    padding of an export that Roboflow already preprocessed.
+    """
+    image = cv2.imread(str(image_file))
+    mask = cv2.imread(str(mask_file), cv2.IMREAD_UNCHANGED)
+    if image is None or mask is None:
+        return None, None
+    h, w = mask.shape[:2]
+    edges = black_edges(image)
+    if edges is not None:
+        if crop and not load_sample.warned:
+            # Allowed, since a training recipe can crop a preprocessed version
+            # again (week-8's did), but usually a mistake.
+            print(
+                f"Warning: {image_file.name} already has black edges, so this version was exported with its "
+                "preprocessing applied, and --static-crop crops it a second time. Pass --static-crop none "
+                "unless the model was trained that way."
+            )
+            load_sample.warned = True
+        mask[~edges] = IGNORE  # the export's padding is labelled background; leave it out
+    if polygon is not None:
+        cv2.fillPoly(mask, [np.round(polygon * [w, h]).astype(np.int32)], IGNORE)
+    if crop:
+        x0, x1, y0, y1 = (round(c / 100 * n) for c, n in zip(crop, (w, w, h, h)))
+        image, mask = image[y0:y1, x0:x1], mask[y0:y1, x0:x1]
+    return image, mask
+
+
+load_sample.warned = False
+
+
+class Segmenter:
+    """Runs a semantic model the way it was trained (fit into a black-edged square) and returns its class
+    map at the input image's own resolution.
+
+    The logits, not the class map, are scaled back up, so the prediction is
+    compared against the labels as drawn: resampling the labels to the network
+    size instead (what Ultralytics' validator does) costs about 2.5 points of
+    IoU on its own.
+    """
+
+    def __init__(self, weights, size, device):
+        import torch
+        from ultralytics import YOLO
+
+        self.torch = torch
+        self.yolo = YOLO(weights)
+        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self.net = self.yolo.model.to(self.device).eval()
+        self.size = size or self.yolo.ckpt.get("train_args", {}).get("imgsz", DEFAULT_RESIZE)
+        self.seconds = 0.0  # time spent in the network, for inference_ms
+
+    def __call__(self, image):
+        torch, F = self.torch, self.torch.nn.functional
+        h, w = image.shape[:2]
+        square = fit_black_edges(image, self.size, cv2.INTER_AREA, (0, 0, 0))
+        scale = self.size / max(h, w)
+        new_w, new_h = round(w * scale), round(h * scale)
+        top, left = (self.size - new_h) // 2, (self.size - new_w) // 2
+        tensor = torch.from_numpy(np.ascontiguousarray(square[..., ::-1].transpose(2, 0, 1)))  # BGR -> RGB
+        tensor = tensor.to(self.device).float().div(255)[None]
+        with torch.no_grad():
+            if self.device != "cpu":
+                torch.cuda.synchronize()
+            started = time.perf_counter()
+            logits = self.net(tensor)
+            logits = logits[0] if isinstance(logits, (list, tuple)) else logits
+            if self.device != "cpu":
+                torch.cuda.synchronize()
+            self.seconds += time.perf_counter() - started
+            logits = F.interpolate(logits.float(), (self.size, self.size), mode="bilinear")
+            logits = logits[:, :, top : top + new_h, left : left + new_w]
+            logits = F.interpolate(logits, (h, w), mode="bilinear")
+            return logits[0].argmax(0).to(torch.uint8).cpu().numpy()
+
+
+def boundary(mask, scorable):
+    """The edge pixels of mask, leaving out those on the image border or next to unscored pixels,
+    which are where the labels stop rather than where the road does."""
+    kernel = np.ones((3, 3), np.uint8)
+    m = mask.astype(np.uint8)
+    edge = m.astype(bool) & ~cv2.erode(m, kernel, borderValue=1).astype(bool)
+    inner = cv2.erode(scorable.astype(np.uint8), kernel, borderValue=0).astype(bool)
+    return edge & inner
+
+
+def hd95(truth, pred, scorable):
+    """95th-percentile Hausdorff distance between the two masks' edges, in pixels, or None if one has none."""
+    a, b = boundary(truth, scorable), boundary(pred, scorable)
+    if not a.any() or not b.any():
+        return None
+    to_a = cv2.distanceTransform((~a).astype(np.uint8), cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
+    to_b = cv2.distanceTransform((~b).astype(np.uint8), cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
+    return float(np.percentile(np.concatenate([to_b[a], to_a[b]]), 95))
+
+
+class Scores:
+    """Accumulates one model's results over a split: a pixel confusion matrix and per-image numbers."""
+
+    def __init__(self, classes, foreground):
+        self.classes, self.foreground = classes, foreground
+        self.matrix = np.zeros((classes, classes), np.int64)  # rows: labels, columns: predictions
+        # Per class and distance band (far, mid, near): pooled [tp, fp, fn].
+        self.bands = {c: np.zeros((len(BANDS), 3), np.int64) for c in foreground}
+        self.images = []  # per image: {"image": name, f"{metric}/{class id}": value, ...}
+        self.seconds, self.count = 0.0, 0
+
+    def add(self, name, truth, pred):
+        scorable = truth != IGNORE
+        t, p = truth[scorable].astype(np.int64), np.minimum(pred[scorable], self.classes - 1).astype(np.int64)
+        self.matrix += np.bincount(t * self.classes + p, minlength=self.classes**2).reshape(self.classes, -1)
+        entry = {"image": name}
+        for c in self.foreground:
+            g, q = (truth == c) & scorable, (pred == c) & scorable
+            tp, fp, fn = int((g & q).sum()), int((q & ~g).sum()), int((g & ~q).sum())
+            entry[f"labelled_px/{c}"], entry[f"predicted_px/{c}"] = tp + fn, tp + fp
+            entry[f"IoU/{c}"] = tp / (tp + fp + fn) if tp + fp + fn else ""  # no road in either: no score
+            entry[f"precision/{c}"] = tp / (tp + fp) if tp + fp else ""
+            entry[f"recall/{c}"] = tp / (tp + fn) if tp + fn else ""
+            distance = hd95(g, q, scorable)
+            entry[f"HD95_px/{c}"] = round(distance, 2) if distance is not None else ""
+            for band, rows in enumerate(band_rows(scorable, g)):
+                gb, qb = g[rows], q[rows]
+                counts = ((gb & qb).sum(), (qb & ~gb).sum(), (gb & ~qb).sum())
+                self.bands[c][band] += counts
+                if BANDS[band] == "near":
+                    hits, union = counts[0], sum(counts)
+                    entry[f"IoU_near/{c}"] = hits / union if union else ""
+        self.images.append(entry)
+        self.count += 1
+
+    def merge(self, other):
+        self.matrix += other.matrix
+        for c in self.bands:
+            self.bands[c] += other.bands[c]
+        self.images += other.images
+        self.seconds += other.seconds
+        self.count += other.count
+
+    def row(self, names):
+        """Summary columns: pooled pixel metrics, the per-image IoU distribution and the edge error."""
+        m = self.matrix
+        labelled, predicted, hits = m.sum(1), m.sum(0), np.diag(m)
+        union = labelled + predicted - hits
+        present = labelled > 0
+        row = {
+            "mIoU": float((hits[present] / union[present]).mean()) if present.any() else "",
+            "pixel_acc": float(hits.sum() / max(m.sum(), 1)),
+        }
+        for c, name in names.items():
+            if c >= self.classes:
                 continue
-            h, w = mask.shape[:2]
-            if crop and resize and (h, w) == (resize, resize):
-                sys.exit(
-                    f"{image_file.name} is already {resize}x{resize}, so this Roboflow version was probably "
-                    "exported with its preprocessing. Pass --static-crop none --resize none."
-                )
-            if polygon is not None:
-                cv2.fillPoly(mask, [np.round(polygon * [w, h]).astype(np.int32)], IGNORE)
-            if crop:
-                x0, x1, y0, y1 = (round(c / 100 * n) for c, n in zip(crop, (w, w, h, h)))
-                image, mask = image[y0:y1, x0:x1], mask[y0:y1, x0:x1]
-            if resize:
-                image = fit_black_edges(image, resize, cv2.INTER_AREA, (0, 0, 0))
-                mask = fit_black_edges(mask, resize, cv2.INTER_NEAREST, IGNORE)
-            cv2.imwrite(str(out / "images" / split / f"{image_file.stem}.png"), image)
-            cv2.imwrite(str(out / "masks" / split / f"{image_file.stem}.png"), mask)
-        prepared[split] = str(out / "images" / split)
-    return prepared
+            row[f"IoU/{name}"] = float(hits[c] / union[c]) if labelled[c] else ""
+            if c not in self.foreground:
+                continue
+            row[f"precision/{name}"] = float(hits[c] / predicted[c]) if labelled[c] and predicted[c] else ""
+            row[f"recall/{name}"] = float(hits[c] / labelled[c]) if labelled[c] else ""
+            p, r = row[f"precision/{name}"], row[f"recall/{name}"]
+            row[f"dice/{name}"] = 2 * p * r / (p + r) if p != "" and r != "" and p + r else ""
+            for band, (tp, fp, fn) in zip(BANDS, self.bands[c]):
+                row[f"IoU_{band}/{name}"] = float(tp / (tp + fp + fn)) if tp + fp + fn else ""
+            ious = np.array([e[f"IoU/{c}"] for e in self.images if e[f"IoU/{c}"] != ""], float)
+            row[f"img_IoU_mean/{name}"] = float(ious.mean()) if len(ious) else ""
+            row[f"img_IoU_p5/{name}"] = float(np.percentile(ious, 5)) if len(ious) else ""
+            row[f"img_IoU_min/{name}"] = float(ious.min()) if len(ious) else ""
+            row[f"img_IoU<0.9/{name}"] = float((ious < 0.9).mean()) if len(ious) else ""
+            distances = np.array([e[f"HD95_px/{c}"] for e in self.images if e[f"HD95_px/{c}"] != ""], float)
+            row[f"HD95_px/{name}"] = float(distances.mean()) if len(distances) else ""
+            row[f"HD95_px_p95/{name}"] = float(np.percentile(distances, 95)) if len(distances) else ""
+        row["inference_ms"] = self.seconds / max(self.count, 1) * 1000
+        return row
+
+    def save_images(self, folder, names, samples, worst=8):
+        """images.csv with every image's numbers, and overlays of the worst images by road IoU."""
+        folder.mkdir(parents=True, exist_ok=True)
+        rename = {f"{k}/{c}": f"{k}/{names[c]}" for c in self.foreground for k in IMAGE_METRICS}
+        keys = list(self.images[0]) if self.images else ["image"]
+        with open(folder / "images.csv", "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=[rename.get(k, k) for k in keys])
+            writer.writeheader()
+            writer.writerows({rename.get(k, k): v for k, v in e.items()} for e in self.images)
+        for old in folder.glob("worst_*.jpg"):
+            old.unlink()
+        c = self.foreground[0] if self.foreground else None
+        scored = sorted((e for e in self.images if c is not None and e[f"IoU/{c}"] != ""), key=lambda e: e[f"IoU/{c}"])
+        for rank, entry in enumerate(scored[:worst], 1):
+            image, truth, pred = samples(entry["image"])
+            cv2.imwrite(str(folder / f"worst_{rank}_IoU{entry[f'IoU/{c}']:.3f}_{entry['image']}.jpg"),
+                        overlay(image, truth, pred, c))
 
 
-def class_scores(metrics, names):
-    """Per-class columns: IoU for every class, and precision and recall for each class but background.
+IMAGE_METRICS = ("labelled_px", "predicted_px", "IoU", "precision", "recall", "HD95_px", "IoU_near")
+# Distance bands along the road: the road nearest the car is at the bottom of
+# the picture, and it is what the planner's corridor starts from.
+BANDS = ("far", "mid", "near")
 
-    From the validator's pixel confusion matrix (rows are the labels, columns
-    the predictions): precision is the share of pixels predicted as the class
-    that are labelled it, recall the share of labelled pixels that are found.
-    A class with no labelled pixels gets blanks rather than 0.
+
+def band_rows(scorable, road):
+    """The rows of each distance band, far to near.
+
+    The labelled road's rows, from its far end down to the bottom of the
+    scored area, split into thirds; rows above the road's far end join the far
+    band, so road invented above the horizon counts there. The bands come from
+    the labels alone, so every model is scored on the same ones. Without
+    labelled road, the scored rows are split instead.
     """
-    matrix = metrics.matrix.cpu().numpy() if metrics.matrix is not None else None
-    scores = {}
-    for i, name in names.items():
-        present = metrics.nt_per_class[i] > 0
-        scores[f"IoU/{name}"] = float(metrics.per_class_iou[i]) if present else ""
-        if name == "background" or matrix is None or i >= len(matrix):
-            continue
-        predicted, labelled = matrix[:, i].sum(), matrix[i].sum()
-        scores[f"precision/{name}"] = float(matrix[i, i] / predicted) if present and predicted else ""
-        scores[f"recall/{name}"] = float(matrix[i, i] / labelled) if present else ""
-    return scores
+    rows = np.flatnonzero(scorable.any(1))
+    if not len(rows):
+        return [rows] * len(BANDS)
+    labelled = np.flatnonzero(road.any(1))
+    along = rows[rows >= labelled[0]] if len(labelled) else rows
+    bands = np.array_split(along, len(BANDS))
+    bands[0] = np.concatenate([rows[rows < along[0]], bands[0]])  # everything above the road is far
+    return bands
 
 
-CLASS_PREFIXES = ("IoU/", "precision/", "recall/")
+def overlay(image, truth, pred, c, width=1280):
+    """Correct road in green, road the model invented in red, road it missed in blue; unscored dimmed."""
+    scorable = truth != IGNORE
+    g, q = (truth == c) & scorable, (pred == c) & scorable
+    out = image.copy()
+    for area, colour in ((g & q, (0, 200, 0)), (q & ~g, (0, 0, 255)), (g & ~q, (255, 80, 0))):
+        out[area] = (0.45 * out[area] + 0.55 * np.array(colour)).astype(np.uint8)
+    out[~scorable] = (out[~scorable] * 0.35).astype(np.uint8)
+    rows, cols = np.flatnonzero(scorable.any(1)), np.flatnonzero(scorable.any(0))
+    if len(rows):  # just the scored area, without an export's padding
+        out = out[rows[0] : rows[-1] + 1, cols[0] : cols[-1] + 1]
+    scale = width / out.shape[1]
+    return cv2.resize(out, (width, round(out.shape[0] * scale)), interpolation=cv2.INTER_AREA)
+
+
+# Per-class columns, in the order they appear.
+CLASS_PREFIXES = (
+    "IoU/", "precision/", "recall/", "dice/", "IoU_near/", "IoU_mid/", "IoU_far/",
+    "img_IoU_mean/", "img_IoU_p5/", "img_IoU_min/", "img_IoU<0.9/",
+    "HD95_px/", "HD95_px_p95/",
+)
+
+
+def class_mismatch(model_names, dataset_names, renames):
+    """Why the model's and the dataset's class ids disagree, or "" if they agree.
+
+    Ids are compared after the OLD=NEW renames, so a model trained on
+    Roboflow's misnamed class still matches a dataset that names it properly,
+    and the other way round. Either side may have classes the other lacks:
+    they score as wrong or missed rather than stopping the run.
+    """
+    mapping = dict(rename.partition("=")[::2] for rename in renames)
+    named = {i: mapping.get(n, n) for i, n in model_names.items()}
+    wrong = {i: (named[i], n) for i, n in dataset_names.items() if i in named and named[i] != mapping.get(n, n)}
+    if wrong:
+        pairs = ", ".join(f"id {i} is {m!r} in the model but {d!r} in the dataset" for i, (m, d) in wrong.items())
+        return f"classes do not match ({pairs})"
+    extra = {i: model_names[i] for i in model_names if i not in dataset_names}
+    if extra:
+        print(f"Model classes {extra} have no labels in this dataset; they still count as wrong predictions.")
+    unknown = {i: n for i, n in dataset_names.items() if i not in named}
+    if unknown:
+        print(f"Dataset classes {unknown} are not in the model; any labels they have count as missed.")
+    return ""
 
 
 def relabel_classes(rows, renames):
@@ -161,6 +398,8 @@ def relabel_classes(rows, renames):
     mapping = {}
     for rename in renames:
         old, _, new = rename.partition("=")
+        if f"IoU/{old}" not in rows[0]:
+            continue  # the dataset already uses the new name, or never had the old one
         if f"IoU/{new}" in rows[0] and new not in empty_classes:
             print(f"Not renaming {old} to {new}: {new} already has its own labels")
             continue
@@ -389,8 +628,15 @@ def save_report(rows, run_dir):
     """Write run_dir/report.html from result rows, headlined by the foreground class's IoU."""
     foreground = [c for c in rows[0] if c.startswith("IoU/") and c != "IoU/background"]
     primary = foreground[0] if len(foreground) == 1 else "mIoU"
-    note = "mIoU averages the IoU of every class, background included."
-    return write_report(rows, run_dir / "report.html", f"{run_dir.name} evaluation", primary, note)
+    note = (
+        "Scored at the labels' own resolution. IoU, precision, recall and dice pool every pixel of the split; "
+        "img_IoU_* is the spread of each image's own IoU; HD95_px is how far the predicted road edge strays, "
+        "in pixels (lower is better). mIoU averages the IoU of every class, background included."
+    )
+    lower = LOWER_IS_BETTER | {c for c in rows[0] if c.startswith(("HD95_px", "img_IoU<"))}
+    return write_report(
+        rows, run_dir / "report.html", f"{run_dir.name} evaluation", primary, note, lower_is_better=lower
+    )
 
 
 def read_summary(csv_path):
@@ -418,20 +664,16 @@ def main():
         choices=[*SPLITS, "all"],
         help="Splits to evaluate; 'all' combines every split (default: each split, then all)",
     )
-    parser.add_argument("--imgsz", type=int, help="Inference size (default: the size each model was trained at)")
-    parser.add_argument("--batch", type=int, default=4)
-    parser.add_argument("--device", help="e.g. 0 or cpu (default: Ultralytics picks)")
+    parser.add_argument(
+        "--imgsz", type=int, help="Network input size the image is fitted into (default: each model's training size)"
+    )
+    parser.add_argument("--device", help="e.g. cuda or cpu (default: cuda if available)")
     parser.add_argument(
         "--static-crop",
         nargs="+",
         default=[str(c) for c in DEFAULT_STATIC_CROP],
         metavar="PCT",
         help="Roboflow static crop as X_MIN X_MAX Y_MIN Y_MAX in percent, or 'none' (default: 0 100 0 66)",
-    )
-    parser.add_argument(
-        "--resize",
-        default=str(DEFAULT_RESIZE),
-        help="Fit into a square of this side with black edges, as Roboflow does, or 'none' (default: 1024)",
     )
     parser.add_argument(
         "--ego-mask",
@@ -458,11 +700,10 @@ def main():
             sys.exit(f"No {run_dir / 'summary.csv'} yet. Run the evaluation once without --report-only.")
         print(f"Saved {save_report(read_summary(run_dir / 'summary.csv'), run_dir)}")
         return
-    from ultralytics import YOLO  # here, so --report-only skips loading torch
     crop = None if args.static_crop == ["none"] else tuple(float(c) for c in args.static_crop)
     if crop is not None and len(crop) != 4:
         parser.error("--static-crop takes X_MIN X_MAX Y_MIN Y_MAX, or none")
-    resize = None if args.resize == "none" else int(args.resize)
+    renames = [] if args.rename == ["none"] else args.rename
 
     data = yaml.safe_load(args.data.read_text())
     dataset_names = {int(k): v for k, v in data["names"].items()}
@@ -471,6 +712,7 @@ def main():
     missing = [s for s in splits if s != "all" and s not in dirs]
     if missing:
         sys.exit(f"The dataset has no {', '.join(missing)} split. It has: {', '.join(dirs)}")
+    scored_splits = list(dirs) if "all" in splits else [s for s in splits if s != "all"]
     weights = args.weights or sorted(WEIGHTS_DIR.glob("*.pt"))
     if not weights:
         sys.exit(f"No weights found in {WEIGHTS_DIR}")
@@ -485,66 +727,62 @@ def main():
             sys.exit(f"{args.ego_mask} has no enabled beamng.camera.ego_mask polygon.")
         ego_name = Path(args.ego_mask).stem
     crop_name = "none" if crop is None else "-".join(f"{c:g}" for c in crop)
-    preprocessing = f"crop {crop_name}, resize {resize or 'none'}, ego mask {ego_name}"
-    out = root / "prepared" / f"crop{crop_name}_resize{resize or 'none'}_ego-{ego_name}"
-    print(f"Preparing images ({preprocessing}) in {out}")
-    dirs = prepare(root, dirs, out, crop, resize, polygon)
+    preprocessing = f"crop {crop_name}, ego mask {ego_name}"
+    variant = f"crop{crop_name}" + (f"-ego-{ego_name}" if polygon is not None else "")  # per-image folder suffix
 
-    # Ultralytics only evaluates its own split names, so each split is handed to
-    # it as 'val' in a copy of data.yaml, with absolute paths so the copy can
-    # live in the run directory.
-    split_data = {}
-    for split in splits:
-        derived = {**data, "path": str(out), "masks_dir": "masks"}
-        derived["val"] = list(dirs.values()) if split == "all" else dirs[split]
-        derived_file = run_dir / f"data-{split}.yaml"
-        derived_file.write_text(yaml.safe_dump(derived, sort_keys=False))
-        split_data[split] = derived_file
-    counts = {s: sum(1 for p in Path(d).iterdir() if p.is_file()) for s, d in dirs.items()}
-    counts["all"] = sum(counts.values())
+    files = {
+        split: [(p, root / "masks" / split / f"{p.stem}.png") for p in sorted(Path(dirs[split]).iterdir()) if p.is_file()]
+        for split in scored_splits
+    }
+    foreground = [c for c, name in dataset_names.items() if name != "background"]
 
     rows = []
     for weight in weights:
-        model = YOLO(weight)
-        if model.task != "semantic":
-            print(f"Skipping {weight.name}: it is a {model.task} model, not semantic segmentation")
+        segmenter = Segmenter(weight, args.imgsz, args.device)
+        model_names = segmenter.yolo.names
+        if segmenter.yolo.task != "semantic":
+            print(f"Skipping {weight.name}: it is a {segmenter.yolo.task} model, not semantic segmentation")
             continue
         # Mask pixel values are class ids, so the dataset and model have to agree
         # on what each id means or the scores are meaningless.
-        if model.names != dataset_names:
-            sys.exit(
-                f"{weight.name} classes {model.names} do not match the dataset's {dataset_names}. "
-                "Re-export the dataset with the classes the model was trained on."
-            )
-        imgsz = args.imgsz or model.ckpt.get("train_args", {}).get("imgsz", 640)
+        mismatch = class_mismatch(model_names, dataset_names, renames)
+        if mismatch:
+            sys.exit(f"{weight.name}: {mismatch}. Re-export the dataset with the classes the model was trained on.")
+        classes = max(len(model_names), max(dataset_names) + 1)
+        per_split = {}
+        for split in scored_splits:
+            print(f"=== {weight.name} on {split}: {len(files[split])} images (input {segmenter.size}) ===", flush=True)
+            scores = Scores(classes, foreground)
+            before = segmenter.seconds
+            for image_file, mask_file in files[split]:
+                image, truth = load_sample(image_file, mask_file, crop, polygon)
+                if image is None:
+                    print(f"  skipping {image_file.name}: image or mask unreadable")
+                    continue
+                scores.add(image_file.stem, truth, segmenter(image))
+            scores.seconds = segmenter.seconds - before
+            per_split[split] = scores
+            by_stem = {p.stem: (p, m) for p, m in files[split]}
+
+            def sample(stem, by_stem=by_stem, segmenter=segmenter):
+                image, truth = load_sample(*by_stem[stem], crop, polygon)
+                return image, truth, segmenter(image)
+
+            scores.save_images(run_dir / f"{weight.stem}-{split}-{variant}", dataset_names, sample)
+        if "all" in splits:
+            combined = Scores(classes, foreground)
+            for scores in per_split.values():
+                combined.merge(scores)
+            per_split["all"] = combined
         for split in splits:
-            print(f"\n=== {weight.name} on {split} (imgsz {imgsz}) ===")
-            metrics = model.val(
-                data=str(split_data[split]),
-                split="val",
-                imgsz=imgsz,
-                batch=args.batch,
-                device=args.device,
-                project=str(run_dir),
-                name=f"{weight.stem}-{split}",
-                exist_ok=True,
-                plots=True,
-            )
-            row = {
-                "weights": weight.name,
-                "split": split,
-                "preprocessing": preprocessing,
-                "images": counts[split],
-                "mIoU": metrics.miou,
-                "pixel_acc": metrics.pixel_accuracy,
-            }
-            row.update(class_scores(metrics, dataset_names))
-            row["inference_ms"] = metrics.speed["inference"]
+            scores = per_split[split]
+            row = {"weights": weight.name, "split": split, "preprocessing": preprocessing, "images": scores.count}
+            row.update(scores.row(dataset_names))
             rows.append(row)
 
     if not rows:
         sys.exit("No semantic segmentation models were evaluated.")
-    rows = order_columns(relabel_classes(rows, [] if args.rename == ["none"] else args.rename))
+    rows = order_columns(relabel_classes(rows, renames))
 
     columns = list(rows[0])
     widths = [max(len(c), *(len(str(r[c])) if not isinstance(r[c], float) else 6 for r in rows)) for c in columns]
@@ -554,12 +792,21 @@ def main():
         cells = [f"{v:.4f}" if isinstance(v, float) else str(v) for v in row.values()]
         print("  ".join(c.ljust(w) for c, w in zip(cells, widths)))
 
+    # Runs with other models or preprocessing build up in the same summary;
+    # a rerun replaces only its own rows.
     summary = run_dir / "summary.csv"
+    if summary.exists():
+        new_keys = {(r["weights"], r["split"], r["preprocessing"]) for r in rows}
+        kept = [r for r in read_summary(summary) if (r["weights"], r["split"], r["preprocessing"]) not in new_keys]
+        rows = kept + rows
+        all_columns = list(dict.fromkeys(c for r in rows for c in r))  # older runs may lack newer columns
+        rows = order_columns([{c: r.get(c, "") for c in all_columns} for r in rows])
+        columns = list(rows[0])
     with open(summary, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=columns)
         writer.writeheader()
         writer.writerows(rows)
-    print(f"Saved {summary}")
+    print(f"Saved {summary} ({len(rows)} rows)")
     print(f"Saved {save_report(rows, run_dir)}")
 
 
