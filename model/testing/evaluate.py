@@ -6,9 +6,8 @@ pixel, at the labels' own resolution: the model's output is scaled up to the
 image, never the labels down to the network, which alone would cost about 2.5
 points of IoU.
 
-    python model/testing/evaluate.py --data model/testing/datasets/final_demo-vokml-v6/data.yaml
-    python model/testing/evaluate.py --data model/testing/datasets/week-8-vos-v1/data.yaml --split test \
-        --static-crop none
+    uv run evaluate.py --data datasets/final_demo-vokml-v6/data.yaml
+    uv run evaluate.py --data datasets/week-8-vos-v1/data.yaml --split test --static-crop none
 
 By default every split is scored on its own and then all of them together
 ("all"). Images the models were trained on score higher than new ones, so the
@@ -35,7 +34,7 @@ Per class, besides background:
                                 and its 95th percentile)
 plus mIoU over all classes, pixel accuracy and the network's time per image.
 
-Results go to model/testing/runs/<dataset>/: summary.csv and report.html with
+Results go to runs/<dataset>/: summary.csv and report.html with
 one row per model and split, and <weights>-<split>/ with images.csv (every
 image's numbers) and overlays of the worst images (green: road found, red:
 road invented, blue: road missed). --report-only rebuilds report.html from the

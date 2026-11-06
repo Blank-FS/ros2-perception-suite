@@ -7,12 +7,12 @@ and masks/<split>/<stem>.png instead, so this rearranges the export and writes
 a data.yaml beside it.
 
     # Download through the API, with the key (and optionally the dataset) in
-    # model/testing/.env; see model/testing/.env.example
-    python model/testing/download_dataset.py
-    python model/testing/download_dataset.py --workspace WS --project PROJ --version 3
+    # .env; see .env.example
+    uv run download_dataset.py
+    uv run download_dataset.py --workspace WS --project PROJ --version 3
 
     # Or use a zip exported by hand from the Roboflow UI
-    python model/testing/download_dataset.py --zip ~/Downloads/export.zip --name demo-route-v3
+    uv run download_dataset.py --zip ~/Downloads/export.zip --name demo-route-v3
 """
 
 import argparse
@@ -145,7 +145,7 @@ def main():
     )
     parser.add_argument("--api-key", default=os.environ.get("ROBOFLOW_API_KEY"), help="Default: $ROBOFLOW_API_KEY")
     parser.add_argument("--zip", type=Path, help="A png-mask-semantic export zip downloaded by hand, instead of the API")
-    parser.add_argument("--name", help="Folder name under model/testing/datasets (default: <project>-v<version>)")
+    parser.add_argument("--name", help="Folder name under datasets (default: <project>-v<version>)")
     parser.add_argument("--force", action="store_true", help="Replace the dataset folder if it already exists")
     args = parser.parse_args()
 

@@ -376,7 +376,7 @@ docker run --rm --runtime nvidia --network host --ipc=host --privileged \
 
 ## Model evaluation
 
-[model/testing/](model/testing/README.md) scores the semantic segmentation weights in `model/weights/` against Roboflow ground truth labels (road IoU, precision and recall), and measures how often the perception gate would reject frames on a recorded drive. Its README covers the setup: the weights, a Roboflow API key in `model/testing/.env`, and the drive video.
+[model/testing/](model/testing/README.md) scores the semantic segmentation weights in `model/weights/` against Roboflow ground truth labels (road IoU, precision and recall), and measures how often the perception gate would reject frames on a recorded drive. It's a separate project that needs no ROS or orfd-lane-detection; see its [SETUP.md](model/testing/SETUP.md).
 
 ---
 

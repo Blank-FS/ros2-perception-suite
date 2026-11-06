@@ -1,8 +1,8 @@
 """Measure how often the perception gate would reject frames, across road thresholds.
 
 Runs each model in model/weights over a drive's video, frame by frame, and passes
-every frame through the pipeline's own perception gate (PerceptionGate, with
-the pipeline config's ROI, hood mask and limits) at each threshold t:
+every frame through a copy of the pipeline's perception gate (gate.py, with the
+pipeline config's ROI, hood mask and limits) at each threshold t:
 
 * a pixel is road when the model's road probability, 1 - P(background), is at
   least t, so a higher t keeps only the road the model is sure of;
@@ -18,10 +18,10 @@ Frames get the preprocessing the models were trained with (the same static
 crop and fit as evaluate.py). The road found in the crop is placed back into
 the pipeline's working frame, below which the hood mask applies as usual.
 
-    python model/testing/gate_sweep.py --source model/testing/recordings/demo_route_hatci.mp4
-    python model/testing/gate_sweep.py --source ... --thresholds 0.3 0.5 0.7 --weights model/weights/yolo26n-demo-route.pt
+    uv run gate_sweep.py --source recordings/demo_route_hatci.mp4
+    uv run gate_sweep.py --source ... --thresholds 0.3 0.5 0.7 --weights ../weights/yolo26n-demo-route.pt
 
-The results go to model/testing/runs/gate-<source>/: summary.csv and
+The results go to runs/gate-<source>/: summary.csv and
 report.html with one row per model and threshold, and frames.csv with every
 frame's decision, to find where the long rejection streaks happen. Add
 --report-only to rebuild report.html from summary.csv without running models.
@@ -33,13 +33,13 @@ import sys
 import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
 from pathlib import Path
 from queue import Empty, Queue
 from threading import Thread
 
 import cv2
 import numpy as np
+
 from evaluate import (
     DEFAULT_RESIZE,
     DEFAULT_STATIC_CROP,
@@ -49,6 +49,7 @@ from evaluate import (
     read_summary,
     write_report,
 )
+from gate import Gate, Stabilizer, load_config, valid_roi
 
 CONFIG_DIR = Path(__file__).resolve().parents[2] / "src/perception_suite/config"
 DEFAULT_CONFIG = CONFIG_DIR / "hatci_vehicle.yaml"  # the vehicle the drives are recorded on
@@ -218,14 +219,6 @@ def masks(levels, labels):
 # --- Gate ------------------------------------------------------------------
 
 
-def gate_config(config_path):
-    from offroad_autonomy.utils.config import load_config
-
-    # A semantic model's confidence is always 1.0 in the pipeline, so its gate
-    # threshold is 0 and only the mask decides.
-    return replace(load_config(config_path), gate_min_confidence=0.0)
-
-
 def gate_worker(config_path, name, labels, own, ring_spec, inbox, outbox):
     """Run the pipeline's stabilizer and gate on one model's level maps, for the labels in own.
 
@@ -240,28 +233,20 @@ def gate_worker(config_path, name, labels, own, ring_spec, inbox, outbox):
     ring_name, ring_shape, model_slot = ring_spec
     memory = SharedMemory(name=ring_name)
     ring = np.ndarray(ring_shape, np.uint8, buffer=memory.buf)
-    from offroad_autonomy.perception.perception_view import PerceptionView
-    from offroad_autonomy.planning.perception_gate import PerceptionGate
-    from offroad_autonomy.postprocessing.temporal_stabilizer import TemporalStabilizer
-    from offroad_autonomy.types import PerceptionResult
-
-    config = gate_config(config_path)
-    valid_roi = PerceptionView(config).valid_roi
-    gate = PerceptionGate(config)
-    stabilizers = {label: TemporalStabilizer(config) for label in own}
+    config = load_config(config_path)
+    roi = valid_roi(config)
+    gate = Gate(config)
+    stabilizers = {label: Stabilizer(config) for label in own}
     while (item := inbox.get()) is not None:
         index, seconds, slot = item
         levels = ring[slot, model_slot]
         results = []
         for label, mask in masks(levels, labels).items():
             if label in stabilizers:
-                perception = PerceptionResult(mask=mask & valid_roi, confidences=[1.0], valid_roi=valid_roi)
-                stabilized = stabilizers[label].stabilize(perception)
-                d = gate.evaluate(stabilized)
-                # stability_score is the IoU of this frame's road mask with the previous frame's.
+                stable, stability = stabilizers[label].stabilize(mask & roi, roi)
+                d = gate.evaluate(stable, roi)
                 results.append(
-                    ((name, label), index, seconds, d.ok, d.reason, d.road_pixels, d.area_fraction,
-                     stabilized.stability_score)
+                    ((name, label), index, seconds, d.ok, d.reason, d.road_pixels, d.area_fraction, stability)
                 )
         outbox.put(results)
     del ring
@@ -367,11 +352,9 @@ def sweep(source, weights, thresholds, config_path, crop, size, stride, max_fram
     road_pixels, area)]} in frame order."""
     import multiprocessing
 
-    from offroad_autonomy.perception.perception_view import PerceptionView
-
-    config = gate_config(config_path)
-    out_w, out_h = PerceptionView(config).size
-    print(f"Gate from {config_path.name}: working frame {out_w}x{out_h}, ROI bottom {config.planner_roi_height:.0%}")
+    config = load_config(config_path)
+    out_w, out_h = config.width, config.height
+    print(f"Gate from {config_path.name}: working frame {out_w}x{out_h}, ROI bottom {config.roi_height:.0%}")
     labels = ["argmax", *[f"{t:g}" for t in sorted(thresholds)]]
 
     # The gate is mostly Python, so it runs in worker processes rather than

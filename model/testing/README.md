@@ -2,8 +2,8 @@
 
 Scores the semantic segmentation weights in `model/weights/` against ground truth
 labels from Roboflow (`evaluate.py`), and measures how often the pipeline's perception gate
-would reject frames on a recorded drive (`gate_sweep.py`). All commands run from the
-workspace root.
+would reject frames on a recorded drive (`gate_sweep.py`). To install everything, follow
+[SETUP.md](SETUP.md). All commands run from `model/testing/`.
 
 ## Weights
 
@@ -20,12 +20,12 @@ They're YOLO26 semantic segmentation models trained in Roboflow at 1024:
 
 Export the Roboflow dataset version as **Semantic Segmentation Masks**
 (`png-mask-semantic`). Either let the script download it, after putting your API key in
-`model/testing/.env`:
+`.env`:
 
 ```bash
-cp model/testing/.env.example model/testing/.env   # fill in ROBOFLOW_API_KEY, optionally the dataset
-uv run model/testing/download_dataset.py
-uv run model/testing/download_dataset.py --workspace <workspace> --project <project> --version <n>
+cp .env.example .env   # fill in ROBOFLOW_API_KEY, optionally the dataset
+uv run download_dataset.py
+uv run download_dataset.py --workspace <workspace> --project <project> --version <n>
 ```
 
 Use the first form if `.env` names the dataset, the second if it doesn't. Flags override
@@ -34,10 +34,10 @@ Use the first form if `.env` names the dataset, the second if it doesn't. Flags 
 Or download the zip from the Roboflow UI and pass it in:
 
 ```bash
-uv run model/testing/download_dataset.py --zip ~/Downloads/export.zip --name demo-route-v<n>
+uv run download_dataset.py --zip ~/Downloads/export.zip --name demo-route-v<n>
 ```
 
-Either way, the images and masks land in `model/testing/datasets/<name>/`, in the layout
+Either way, the images and masks land in `datasets/<name>/`, in the layout
 Ultralytics expects, with a `data.yaml` beside them.
 
 To find the API key, open the workspace on app.roboflow.com, go to **Settings** (bottom of
@@ -48,7 +48,7 @@ workspace, not to you, so anyone with the key can access that workspace's data.
 ## 2. Evaluate
 
 ```bash
-uv run model/testing/evaluate.py --data model/testing/datasets/<name>/data.yaml
+uv run evaluate.py --data datasets/<name>/data.yaml
 ```
 
 This evaluates every model on each split (train, val and test) on its own, then on all of
@@ -62,9 +62,9 @@ For example, to compare all four models on the 900 test images of `week-8-vos` v
 the new models were trained (see the next section) and on the whole picture:
 
 ```bash
-uv run model/testing/download_dataset.py --workspace lucianas-workspace-pqyes --project week-8-vos --version 1
-uv run model/testing/evaluate.py --data model/testing/datasets/week-8-vos-v1/data.yaml --split test --static-crop 0 100 0 66
-uv run model/testing/evaluate.py --data model/testing/datasets/week-8-vos-v1/data.yaml --split test --static-crop none
+uv run download_dataset.py --workspace lucianas-workspace-pqyes --project week-8-vos --version 1
+uv run evaluate.py --data datasets/week-8-vos-v1/data.yaml --split test --static-crop 0 100 0 66
+uv run evaluate.py --data datasets/week-8-vos-v1/data.yaml --split test --static-crop none
 ```
 
 ### Preprocessing
@@ -91,17 +91,17 @@ To score the models the way the pipeline runs them today, use the whole frame wi
 masked after inference:
 
 ```bash
-uv run model/testing/evaluate.py --data ... --static-crop none \
-    --ego-mask src/perception_suite/config/demo_route.yaml
+uv run evaluate.py --data ... --static-crop none \
+    --ego-mask ../../src/perception_suite/config/demo_route.yaml
 ```
 
 ### Results
 
-The results go to `model/testing/runs/<name>/`:
+The results go to `runs/<name>/`:
 
 - `summary.csv` and `report.html`, with one row per model and split. The report is a single
   page you can filter by split and model and sort by any column. To open it from WSL, run
-  `explorer.exe "$(wslpath -w model/testing/runs/<name>/report.html)"`. Add `--report-only`
+  `explorer.exe "$(wslpath -w runs/<name>/report.html)"`. Add `--report-only`
   to rebuild just the page from the existing `summary.csv` in under a second, without
   running the models.
 - `<weights>-<split>-<crop>/images.csv`, with every image's road IoU, precision, recall and
@@ -155,8 +155,8 @@ download warns about augmented copies, generate a version without augmentation; 
 
 ## 3. Gate rejections on a drive
 
-`gate_sweep.py` runs the models over a drive's video and passes every frame through the
-pipeline's own perception gate (`PerceptionGate`). It uses the planner ROI, hood mask and
+`gate_sweep.py` runs the models over a drive's video and passes every frame through a copy
+of the pipeline's perception gate. It uses the planner ROI, hood mask and
 limits from `src/perception_suite/config/hatci_vehicle.yaml`, the vehicle the drives are
 recorded on. For each model it reports, at each threshold:
 
@@ -183,15 +183,20 @@ Drive videos go in `recordings/`, which is gitignored. The demo route is the cam
 of `bag_20261006_125333`, stitched into a video:
 
 ```bash
-curl -L -o model/testing/recordings/demo_route_hatci.mp4 \
+curl -L -o recordings/demo_route_hatci.mp4 \
   "https://www.dropbox.com/scl/fi/2brwgt0hmjszh4x0x8k0e/video.mp4?rlkey=8e3ircva7xzwhfdvcyihjdsgd&dl=1"
-uv run model/testing/gate_sweep.py --source model/testing/recordings/demo_route_hatci.mp4
+uv run gate_sweep.py --source recordings/demo_route_hatci.mp4
 ```
 
 It runs at about 30 frames/s on the RTX A2000 laptop, so a drive takes about as long as the
 video. Each frame goes through both models and 20 gate checks (2 models × 10 masks), where
-the car does one of each. The results go to `model/testing/runs/gate-<video>/`: `summary.csv` and
+the car does one of each. The results go to `runs/gate-<video>/`: `summary.csv` and
 `report.html` with one row per model and threshold, and `frames.csv` with every frame's
 decision, so you can find the frames in a long rejection streak. Use `--thresholds` to change
 the sweep, `--stride N` to use every Nth frame, `--max-frames N` for a quick check, and
 `--report-only` to rebuild the page.
+
+The gate lives in `gate.py`, copied from `orfd-lane-detection` at commit `e59deae` so that testing
+doesn't need that repository. If the gate, stabilizer or hood mask changes there, update
+`gate.py` to match, or the sweep stops reflecting the vehicle. The gate's limits still come
+from the pipeline config, so changing those needs no update.
