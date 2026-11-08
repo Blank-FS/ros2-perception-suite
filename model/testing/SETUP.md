@@ -6,7 +6,7 @@ Everything here runs from this folder, `model/testing/`. You don't need ROS,
 ## 1. Install
 
 You need `git` and [`uv`](https://docs.astral.sh/uv/getting-started/installation/). A CUDA
-GPU is optional but much faster. `uv sync` downloads about 8 GB, mostly PyTorch.
+GPU is optional but much faster. `uv sync` installs about 8 GB, mostly PyTorch.
 
 ```bash
 git clone git@github.com:HATCI-MDP/ros2-perception-suite.git

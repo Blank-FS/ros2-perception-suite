@@ -340,7 +340,7 @@ def save_report(rows, run_dir):
         note,
         filters=("weights", "threshold"),
         lower_is_better={c for c in rows[0] if c.startswith(("reject", "longest", "rejects/", "unstable"))},
-        identity=("threshold", "frames", "streak_starts_s", "tightest_at_s"),
+        identity=("input", "threshold", "frames", "streak_starts_s", "tightest_at_s"),
     )
 
 
@@ -453,6 +453,13 @@ def sweep(source, weights, thresholds, config_path, crop, size, stride, max_fram
     return decisions
 
 
+def training_size(weight):
+    """The input size a model was trained at."""
+    from ultralytics import YOLO
+
+    return YOLO(weight).ckpt.get("train_args", {}).get("imgsz", DEFAULT_RESIZE)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--source", type=Path, required=True, help="The drive's video file")
@@ -470,7 +477,7 @@ def main():
         metavar="PCT",
         help="Training crop as X_MIN X_MAX Y_MIN Y_MAX in percent, or 'none' (default: 0 100 0 66)",
     )
-    parser.add_argument("--resize", type=int, default=DEFAULT_RESIZE, help="Training fit size (default: 1024)")
+    parser.add_argument("--resize", type=int, help="Network input size (default: each model's training size)")
     parser.add_argument("--stride", type=int, default=1, help="Use every Nth frame (default: every frame)")
     parser.add_argument("--max-frames", type=int, help="Stop after this many frames, for a quick check")
     parser.add_argument("--device", help="e.g. cuda or cpu (default: cuda if available)")
@@ -495,26 +502,49 @@ def main():
     if not weights:
         sys.exit(f"No weights found in {WEIGHTS_DIR}")
 
-    decisions = sweep(
-        source, weights, args.thresholds, args.config, crop, args.resize, args.stride, args.max_frames, args.device
-    )
-    rows = [summarize(name, label, entries, args.stride) for (name, label), entries in decisions.items()]
+    # Models trained at the same size share a pass over the video.
+    groups = {}
+    for weight in weights:
+        groups.setdefault(args.resize or training_size(weight), []).append(weight)
+    decisions, sizes = {}, {}
+    for size, group in groups.items():
+        print(f"Input size {size}: {', '.join(w.name for w in group)}")
+        decisions.update(
+            sweep(source, group, args.thresholds, args.config, crop, size, args.stride, args.max_frames, args.device)
+        )
+        sizes.update({w.name: size for w in group})
+    rows = [
+        {"input": sizes[name], **summarize(name, label, entries, args.stride)}
+        for (name, label), entries in decisions.items()
+    ]
     if not rows or not rows[0]["frames"]:
         sys.exit(f"No frames read from {source}")
 
+    # Other models' results stay, so a sweep of one new model adds to the comparison.
     run_dir.mkdir(parents=True, exist_ok=True)
-    with open(run_dir / "frames.csv", "w", newline="") as f:
+    frames_file, summary_file = run_dir / "frames.csv", run_dir / "summary.csv"
+    kept_frames = []
+    if frames_file.exists():
+        with open(frames_file, newline="") as f:
+            kept_frames = [r for r in csv.reader(f) if r[0] != "weights" and r[0] not in sizes]
+    with open(frames_file, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(
             ["weights", "threshold", "frame", "time_s", "ok", "reason", "road_pixels", "area_fraction", "stability"]
         )
+        writer.writerows(kept_frames)
         for (name, label), entries in decisions.items():
             for index, seconds, ok, reason, road_pixels, area, stability in entries:
                 writer.writerow(
                     [name, label, index, f"{seconds:.3f}", int(ok), reason, road_pixels, f"{area:.4f}",
                      f"{stability:.4f}"]
                 )
-    with open(run_dir / "summary.csv", "w", newline="") as f:
+    new_rows = rows
+    if summary_file.exists():
+        # Rows from before the input column were all run at the default size.
+        kept = [{"input": DEFAULT_RESIZE, **r} for r in read_summary(summary_file) if r["weights"] not in sizes]
+        rows = kept + rows
+    with open(summary_file, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
@@ -522,9 +552,9 @@ def main():
     columns = ["weights", "threshold", "reject_rate", "longest_reject_streak", "longest_reject_s"]
     print(f"\nGate rejections on {source.name}:")
     print("  ".join(f"{c:>22}" for c in columns))
-    for row in rows:
+    for row in new_rows:
         print("  ".join(f"{row[c]:>22.4f}" if isinstance(row[c], float) else f"{row[c]:>22}" for c in columns))
-    print(f"Saved {run_dir / 'summary.csv'}, {run_dir / 'frames.csv'}")
+    print(f"Saved {summary_file}, {frames_file}")
     print(f"Saved {save_report(rows, run_dir)}")
 
 

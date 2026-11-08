@@ -728,6 +728,9 @@ def main():
     crop_name = "none" if crop is None else "-".join(f"{c:g}" for c in crop)
     preprocessing = f"crop {crop_name}, ego mask {ego_name}"
     variant = f"crop{crop_name}" + (f"-ego-{ego_name}" if polygon is not None else "")  # per-image folder suffix
+    if args.imgsz:  # a forced size is its own result, beside the training-size one
+        preprocessing += f", input {args.imgsz}"
+        variant += f"-input{args.imgsz}"
 
     files = {
         split: [(p, root / "masks" / split / f"{p.stem}.png") for p in sorted(Path(dirs[split]).iterdir()) if p.is_file()]

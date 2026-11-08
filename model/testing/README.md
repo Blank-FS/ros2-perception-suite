@@ -9,12 +9,13 @@ would reject frames on a recorded drive (`gate_sweep.py`). To install everything
 
 The weights are not in git (`*.pt` is gitignored), so copy them into `model/weights/`.
 Both scripts use every `.pt` file there by default, or the ones passed with `--weights`.
-They're YOLO26 semantic segmentation models trained in Roboflow at 1024:
+They're YOLO26 semantic segmentation models. Each runs at the input size it was trained at:
 
-| Weights | Trained on |
-|---|---|
-| `yolo26n-demo-route.pt`, `yolo26s-demo-route.pt` | `final_demo-vokml` v4/v6: 236 frames of the demo route |
-| `week8yolo26n.pt`, `week8yolo26s.pt` | `week-8-vos` v1: 6,186 frames of the same drive |
+| Weights | Input | Trained on |
+|---|---|---|
+| `yolo26n-demo-route.pt`, `yolo26s-demo-route.pt` | 1024 | `final_demo-vokml` v4/v6: 236 frames of the demo route |
+| `week8yolo26n.pt`, `week8yolo26s.pt` | 1024 | `week-8-vos` v1: 6,186 frames of the same drive, cropped twice (see Preprocessing) |
+| `rf26n-sem-640.pt`, `rf26s-sem-640.pt` | 640 | `week-8-vos` v1, retrained without the second crop |
 
 ## 1. Get the dataset
 
@@ -112,7 +113,8 @@ The results go to `runs/<name>/`:
 
 Runs with other models or preprocessing add to the same `summary.csv` and report, so they
 can be compared side by side (filter by `preprocessing`); rerunning one replaces only its own
-rows.
+rows. `--imgsz 640` scores a model at another input size, as a separate result, which is how to
+compare models trained at different sizes.
 
 The columns for the road class, `traversable_road`:
 
@@ -192,7 +194,8 @@ It runs at about 30 frames/s on the RTX A2000 laptop, so a drive takes about as 
 video. Each frame goes through both models and 20 gate checks (2 models × 10 masks), where
 the car does one of each. The results go to `runs/gate-<video>/`: `summary.csv` and
 `report.html` with one row per model and threshold, and `frames.csv` with every frame's
-decision, so you can find the frames in a long rejection streak. Use `--thresholds` to change
+decision, so you can find the frames in a long rejection streak. Each model runs at its
+training size (`--resize` overrides that), and a sweep of some models keeps the others' results. Use `--thresholds` to change
 the sweep, `--stride N` to use every Nth frame, `--max-frames N` for a quick check, and
 `--report-only` to rebuild the page.
 
