@@ -16,7 +16,8 @@ uv sync
 
 ## 2. Add the weights
 
-The weights aren't in git. Copy the `.pt` files into `model/weights/`.
+The six fine-tuned weights come with the clone, in `model/weights/`. To test other weights,
+copy their `.pt` files there too.
 
 ## 3. Add the Roboflow key
 

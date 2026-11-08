@@ -7,7 +7,7 @@ would reject frames on a recorded drive (`gate_sweep.py`). To install everything
 
 ## Weights
 
-The weights are not in git (`*.pt` is gitignored), so copy them into `model/weights/`.
+The weights are in git, in `model/weights/` (the only `.pt` files that aren't gitignored).
 Both scripts use every `.pt` file there by default, or the ones passed with `--weights`.
 They're YOLO26 semantic segmentation models. Each runs at the input size it was trained at:
 

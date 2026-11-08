@@ -20,6 +20,8 @@ log/
 # Model weights (Keep the repo light)
 *.ts
 *.pt
+# Except the fine-tuned segmentation weights, which are small enough to keep in git
+!model/weights/*.pt
 *.engine
 *.onnx
 

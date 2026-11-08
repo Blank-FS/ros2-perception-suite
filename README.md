@@ -403,7 +403,7 @@ ros2-perception-suite/
 │       ├── setup.py
 │       └── package.xml
 ├── model/
-│   ├── weights/                         # Fine-tuned .pt weights (not in git)
+│   ├── weights/                         # Fine-tuned segmentation weights (.pt)
 │   └── testing/                         # Evaluation and gate sweep; see its README
 ├── pyproject.toml                       # uv project; pulls in ../orfd-lane-detection
 └── README.md
