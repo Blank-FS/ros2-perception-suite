@@ -45,6 +45,7 @@ import argparse
 import csv
 import html
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -233,13 +234,14 @@ class Scores:
         # Per class and distance band (far, mid, near): pooled [tp, fp, fn].
         self.bands = {c: np.zeros((len(BANDS), 3), np.int64) for c in foreground}
         self.images = []  # per image: {"image": name, f"{metric}/{class id}": value, ...}
+        self.counts = []  # per image: {class id: (tp, fp, fn)}, for pooling over segments
         self.seconds, self.count = 0.0, 0
 
     def add(self, name, truth, pred):
         scorable = truth != IGNORE
         t, p = truth[scorable].astype(np.int64), np.minimum(pred[scorable], self.classes - 1).astype(np.int64)
         self.matrix += np.bincount(t * self.classes + p, minlength=self.classes**2).reshape(self.classes, -1)
-        entry = {"image": name}
+        entry, counts_by_class = {"image": name}, {}
         for c in self.foreground:
             g, q = (truth == c) & scorable, (pred == c) & scorable
             tp, fp, fn = int((g & q).sum()), int((q & ~g).sum()), int((g & ~q).sum())
@@ -249,6 +251,7 @@ class Scores:
             entry[f"recall/{c}"] = tp / (tp + fn) if tp + fn else ""
             distance = hd95(g, q, scorable)
             entry[f"HD95_px/{c}"] = round(distance, 2) if distance is not None else ""
+            counts_by_class[c] = (tp, fp, fn)
             for band, rows in enumerate(band_rows(scorable, g)):
                 gb, qb = g[rows], q[rows]
                 counts = ((gb & qb).sum(), (qb & ~gb).sum(), (gb & ~qb).sum())
@@ -257,6 +260,7 @@ class Scores:
                     hits, union = counts[0], sum(counts)
                     entry[f"IoU_near/{c}"] = hits / union if union else ""
         self.images.append(entry)
+        self.counts.append(counts_by_class)
         self.count += 1
 
     def merge(self, other):
@@ -264,6 +268,7 @@ class Scores:
         for c in self.bands:
             self.bands[c] += other.bands[c]
         self.images += other.images
+        self.counts += other.counts
         self.seconds += other.seconds
         self.count += other.count
 
@@ -300,11 +305,38 @@ class Scores:
         row["inference_ms"] = self.seconds / max(self.count, 1) * 1000
         return row
 
+    def save_segments(self, path, names):
+        """segments.csv: pooled IoU over each run of consecutive frames, when image names start with a frame
+        number (as Roboflow's video exports do). A block-split test set is a few long segments of nearly
+        identical frames, so comparing models per segment shows whether a gap holds across the drive."""
+        frames = [re.match(r"(\d+)_", e["image"]) for e in self.images]
+        if not self.images or not all(frames):
+            path.unlink(missing_ok=True)
+            return
+        order = sorted(range(len(frames)), key=lambda i: int(frames[i].group(1)))
+        segments, previous = [], None
+        for i in order:
+            number = int(frames[i].group(1))
+            if previous is None or number != previous + 1:
+                segments.append([])
+            segments[-1].append(i)
+            previous = number
+        with open(path, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["first_frame", "last_frame", "images", *(f"IoU/{names[c]}" for c in self.foreground)])
+            for members in segments:
+                row = [frames[members[0]].group(1), frames[members[-1]].group(1), len(members)]
+                for c in self.foreground:
+                    tp, fp, fn = (sum(self.counts[i][c][k] for i in members) for k in range(3))
+                    row.append(round(tp / (tp + fp + fn), 4) if tp + fp + fn else "")
+                writer.writerow(row)
+
     def save_images(self, folder, names, samples, worst=8):
         """images.csv with every image's numbers, and overlays of the worst images by road IoU."""
         folder.mkdir(parents=True, exist_ok=True)
         rename = {f"{k}/{c}": f"{k}/{names[c]}" for c in self.foreground for k in IMAGE_METRICS}
         keys = list(self.images[0]) if self.images else ["image"]
+        self.save_segments(folder / "segments.csv", names)
         with open(folder / "images.csv", "w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=[rename.get(k, k) for k in keys])
             writer.writeheader()

@@ -304,7 +304,7 @@ def summarize(weights, threshold, decisions, stride):
     if len(stability):
         row["stability_mean"] = round(float(stability.mean()), 4)
         row["stability_p5"] = round(float(np.percentile(stability, 5)), 4)
-        row["unstable_frames"] = round(float((stability < UNSTABLE).mean()), 4)
+        row["unstable_frames"] = round(float((stability < UNSTABLE).mean()), 6)
     if decisions:
         tightest = min(decisions, key=lambda d: d[5])
         row["tightest_at_s"] = round(tightest[1], 2)

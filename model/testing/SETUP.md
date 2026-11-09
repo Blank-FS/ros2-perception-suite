@@ -58,3 +58,26 @@ uv run gate_sweep.py --source recordings/demo_route_hatci.mp4
 
 Results go to `runs/`; open `report.html` in each run's folder. [README.md](README.md) explains
 the metrics and options.
+
+## Reproducing the R2 results
+
+To reproduce the results in the R2 requirement (Segmentation Performance), run:
+
+```bash
+uv run reproduce_r2.py
+```
+
+It downloads anything missing from step 4 plus one more dataset, runs the four evaluations
+behind R2 (about 25 minutes on a laptop GPU), and prints R2's tables, each with the report it
+comes from:
+
+| R2 | Report |
+|---|---|
+| Table 1, 26n and 26s | `runs/final_demo-vokml-v6/report.html` |
+| Table 1, VOS models; Table 2; Current Status and Next Steps numbers | `runs/week-8-vos-v1/report.html` |
+| Note under Table 1 (gap per segment) | `runs/week-8-vos-v1/<model>-test-cropnone-input640/segments.csv` |
+| Table 3 | `runs/gate-demo_route_hatci/report.html` |
+
+In R2, 26n and 26s are `yolo26n-demo-route` and `yolo26s-demo-route`, and 26n_vos and 26s_vos
+are `rf26n-sem-640` and `rf26s-sem-640`. Numbers should match R2 to about the fourth decimal
+place. To print the tables again without re-running, use `uv run reproduce_r2.py --tables-only`.

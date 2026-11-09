@@ -2,8 +2,8 @@
 
 Scores the semantic segmentation weights in `model/weights/` against ground truth
 labels from Roboflow (`evaluate.py`), and measures how often the pipeline's perception gate
-would reject frames on a recorded drive (`gate_sweep.py`). To install everything, follow
-[SETUP.md](SETUP.md). All commands run from `model/testing/`.
+would reject frames on a recorded drive (`gate_sweep.py`). To install everything, and to reproduce
+the R2 requirement results, follow [SETUP.md](SETUP.md). All commands run from `model/testing/`.
 
 ## Weights
 
@@ -107,6 +107,9 @@ The results go to `runs/<name>/`:
   running the models.
 - `<weights>-<split>-<crop>/images.csv`, with every image's road IoU, precision, recall and
   HD95, to find the frames behind a number.
+- `<weights>-<split>-<crop>/segments.csv`, with road IoU pooled over each run of consecutive
+  frames, when image names start with a frame number (as `week-8-vos` does). Its test set is
+  three 10-second segments, so this shows whether a gap between models holds across the drive.
 - `<weights>-<split>-<crop>/worst_*.jpg`, the 8 images with the lowest road IoU: green is
   road the model found, red is road it invented, blue is road it missed, and unscored areas
   are dimmed.
